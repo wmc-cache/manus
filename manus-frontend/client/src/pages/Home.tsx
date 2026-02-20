@@ -1,0 +1,221 @@
+/**
+ * Home - Manus MVP 主页面（含计算机窗口 + 会话隔离）
+ * 设计风格: Glass Workspace 毛玻璃工作台
+ * 布局: 左侧侧边栏 + 中间对话区 + 右侧计算机窗口
+ * 
+ * 色彩: 深灰蓝底色 + 毛玻璃卡片 + 蓝紫色强调色
+ * 字体: DM Sans (UI) + JetBrains Mono (代码)
+ * 动画: Spring 物理动画，卡片悬停上浮
+ */
+import { useRef, useEffect, useState, useCallback } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import { PanelLeftClose, PanelLeft, Monitor, PanelRightClose } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { useAgent } from "@/hooks/useAgent";
+import { useSandbox } from "@/hooks/useSandbox";
+import Sidebar from "@/components/Sidebar";
+import EmptyState from "@/components/EmptyState";
+import MessageBubble from "@/components/MessageBubble";
+import ThinkingIndicator from "@/components/ThinkingIndicator";
+import ChatInput from "@/components/ChatInput";
+import ComputerPanel from "@/components/sandbox/ComputerPanel";
+
+const HERO_BG =
+  "https://private-us-east-1.manuscdn.com/sessionFile/wYRFO7o4twJWKVfWlISpqY/sandbox/drOIOkPpOFG7RUVTquZoNi-img-1_1771589325000_na1fn_aGVyby1iZw.png?x-oss-process=image/resize,w_1920,h_1920/format,webp/quality,q_80&Expires=1798761600&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly9wcml2YXRlLXVzLWVhc3QtMS5tYW51c2Nkbi5jb20vc2Vzc2lvbkZpbGUvd1lSRk83bzR0d0pXS1ZmV2xJU3BxWS9zYW5kYm94L2RyT0lPa1BwT0ZHN1JVVlRxdVpvTmktaW1nLTFfMTc3MTU4OTMyNTAwMF9uYTFmbl9hR1Z5YnkxaVp3LnBuZz94LW9zcy1wcm9jZXNzPWltYWdlL3Jlc2l6ZSx3XzE5MjAsaF8xOTIwL2Zvcm1hdCx3ZWJwL3F1YWxpdHkscV84MCIsIkNvbmRpdGlvbiI6eyJEYXRlTGVzc1RoYW4iOnsiQVdTOkVwb2NoVGltZSI6MTc5ODc2MTYwMH19fV19&Key-Pair-Id=K2HSFNDJXOU9YS&Signature=bLV0gYsEmcPgJBG-cXYD2csT3PZ-duS39GcAI3N41yZoT3xOBgXHuzp2BCO2vC8YHdisx~Z11Ihq5Y6e51f2wUIpYhtvEG73mP92xhMxX85lMa~73jqZiqTwagT3gOc2iEtU9l9vbUfrNNWZcgt6KesNAhYIaKGk0dxlEkS4ZnSqHeM~sPF~KntQvY3rprWr51kL-qPnqXn1rWgCbYkgU0tdhSN0oFu2HBnygMIGWtPpmfj5l0Ts0WrD~UmBURNrVIYw8ECC-WRACa84M3G75csooYLAW5F8JpRviklNLneu9iW3oLUUUbQcJqKM57E08UicyQ~SoeVTkaUZGSxIUg__";
+
+export default function Home() {
+  const {
+    messages,
+    isLoading,
+    isThinking,
+    error,
+    iteration,
+    conversationId,
+    sendMessage,
+    stopAgent,
+    clearMessages,
+  } = useAgent();
+
+  const sandbox = useSandbox();
+
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [computerOpen, setComputerOpen] = useState(true);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  // 记录上一次的 conversationId，用于检测变化
+  const prevConvIdRef = useRef<string | null>(null);
+
+  // 自动滚动到底部
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, isThinking]);
+
+  // 当 Agent 开始工作时自动打开计算机窗口
+  useEffect(() => {
+    if (isLoading) {
+      setComputerOpen(true);
+    }
+  }, [isLoading]);
+
+  // 当 conversationId 变化时，切换计算机窗口的订阅
+  useEffect(() => {
+    if (conversationId && conversationId !== prevConvIdRef.current) {
+      sandbox.switchConversation(conversationId);
+      prevConvIdRef.current = conversationId;
+    }
+  }, [conversationId, sandbox.switchConversation]);
+
+  const handleNewChat = useCallback(() => {
+    clearMessages();
+    // 新对话时重置计算机窗口
+    sandbox.switchConversation(null);
+    prevConvIdRef.current = null;
+  }, [clearMessages, sandbox.switchConversation]);
+
+  const handleSuggestionClick = useCallback(
+    (text: string) => {
+      sendMessage(text);
+    },
+    [sendMessage]
+  );
+
+  const hasMessages = messages.length > 0;
+
+  return (
+    <div
+      className="h-screen flex overflow-hidden"
+      style={{
+        backgroundImage: `url(${HERO_BG})`,
+        backgroundSize: "cover",
+        backgroundPosition: "center",
+      }}
+    >
+      {/* 背景遮罩 */}
+      <div className="absolute inset-0 bg-background/85 backdrop-blur-sm" />
+
+      {/* 内容层 */}
+      <div className="relative flex w-full h-full">
+        {/* 侧边栏 */}
+        <AnimatePresence>
+          {sidebarOpen && <Sidebar onNewChat={handleNewChat} />}
+        </AnimatePresence>
+
+        {/* 主内容区 - 对话 */}
+        <main className="flex-1 flex flex-col h-full min-w-0">
+          {/* 顶部栏 */}
+          <header className="flex items-center justify-between px-4 py-3 border-b border-border/30">
+            <div className="flex items-center gap-2">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                onClick={() => setSidebarOpen(!sidebarOpen)}
+              >
+                {sidebarOpen ? (
+                  <PanelLeftClose className="w-4 h-4" />
+                ) : (
+                  <PanelLeft className="w-4 h-4" />
+                )}
+              </Button>
+
+              {hasMessages && (
+                <div className="flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                  <span className="text-sm text-muted-foreground">
+                    {isLoading ? "Agent 工作中..." : "就绪"}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {/* 计算机窗口切换按钮 */}
+            <Button
+              variant="ghost"
+              size="sm"
+              className={`gap-1.5 text-xs ${
+                computerOpen
+                  ? "text-primary"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+              onClick={() => setComputerOpen(!computerOpen)}
+            >
+              {computerOpen ? (
+                <PanelRightClose className="w-4 h-4" />
+              ) : (
+                <Monitor className="w-4 h-4" />
+              )}
+              <span className="hidden sm:inline">
+                {computerOpen ? "收起" : "计算机"}
+              </span>
+              {/* 连接状态点 */}
+              <div
+                className={`w-1.5 h-1.5 rounded-full ${
+                  sandbox.connected ? "bg-emerald-400" : "bg-red-400"
+                }`}
+              />
+            </Button>
+          </header>
+
+          {/* 消息区域 */}
+          <div className="flex-1 overflow-y-auto">
+            {!hasMessages ? (
+              <EmptyState onSuggestionClick={handleSuggestionClick} />
+            ) : (
+              <div className="max-w-3xl mx-auto px-4 py-6">
+                {messages.map((msg) => (
+                  <MessageBubble key={msg.id} message={msg} />
+                ))}
+
+                <AnimatePresence>
+                  {isThinking && <ThinkingIndicator iteration={iteration} />}
+                </AnimatePresence>
+
+                {error && (
+                  <div className="mx-4 my-2 p-3 rounded-xl bg-destructive/10 border border-destructive/20 text-sm text-destructive">
+                    {error}
+                  </div>
+                )}
+
+                <div ref={messagesEndRef} />
+              </div>
+            )}
+          </div>
+
+          {/* 输入区域 */}
+          <ChatInput
+            onSend={sendMessage}
+            onStop={stopAgent}
+            isLoading={isLoading}
+          />
+        </main>
+
+        {/* 计算机窗口面板 */}
+        <AnimatePresence>
+          {computerOpen && (
+            <motion.div
+              initial={{ width: 0, opacity: 0 }}
+              animate={{ width: "50%", opacity: 1 }}
+              exit={{ width: 0, opacity: 0 }}
+              transition={{ type: "spring", stiffness: 300, damping: 30 }}
+              className="h-full border-l border-border/30 overflow-hidden"
+              style={{ maxWidth: "700px", minWidth: "380px" }}
+            >
+              <ComputerPanel
+                connected={sandbox.connected}
+                activeWindow={sandbox.activeWindow}
+                onWindowChange={sandbox.setActiveWindow}
+                terminalOutput={sandbox.terminalOutput}
+                onTerminalInput={sandbox.sendTerminalInput}
+                browserData={sandbox.browserData}
+                editorFile={sandbox.editorFile}
+                fileTree={sandbox.fileTree}
+                onFileClick={sandbox.fetchFileContent}
+                onRefreshFiles={sandbox.fetchFileTree}
+                onClose={() => setComputerOpen(false)}
+              />
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+    </div>
+  );
+}
