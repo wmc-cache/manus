@@ -48,20 +48,35 @@ export default function ToolCallCard({ toolCall }: ToolCallCardProps) {
   const statusConfig = STATUS_CONFIG[toolCall.status];
   const toolName = TOOL_NAMES[toolCall.name] || toolCall.name;
 
+  const args = (toolCall.arguments || {}) as Record<string, unknown>;
+  const resultText = typeof toolCall.result === "string"
+    ? toolCall.result
+    : toolCall.result === undefined || toolCall.result === null
+      ? ""
+      : JSON.stringify(toolCall.result, null, 2);
+
+  const argsJson = (() => {
+    try {
+      return JSON.stringify(args, null, 2);
+    } catch {
+      return "{}";
+    }
+  })();
+
   // 格式化参数显示
   const formatArgs = () => {
-    const args = toolCall.arguments;
-    if (toolCall.name === "web_search") return args.query as string;
-    if (toolCall.name === "shell_exec") return `$ ${(args.command as string || "").slice(0, 60)}`;
+    if (toolCall.name === "web_search") return (args.query as string) || "(无查询参数)";
+    if (toolCall.name === "shell_exec") return `$ ${((args.command as string) || "").slice(0, 60)}`;
     if (toolCall.name === "execute_code") {
-      const code = args.code as string;
+      const code = (args.code as string) || "";
+      if (!code) return "(无代码参数)";
       return code.length > 80 ? code.slice(0, 80) + "..." : code;
     }
-    if (toolCall.name === "browser_navigate") return args.url as string;
+    if (toolCall.name === "browser_navigate") return (args.url as string) || "(无 URL 参数)";
     if (toolCall.name === "read_file" || toolCall.name === "write_file") {
-      return args.path as string;
+      return (args.path as string) || "(无路径参数)";
     }
-    return JSON.stringify(args);
+    return argsJson;
   };
 
   return (
@@ -133,18 +148,18 @@ export default function ToolCallCard({ toolCall }: ToolCallCardProps) {
                 <div className="mt-3">
                   <p className="text-xs text-muted-foreground mb-1 font-medium">参数</p>
                   <pre className="text-xs bg-black/30 rounded-lg p-3 overflow-x-auto font-mono text-foreground/80 max-h-40 overflow-y-auto">
-                    {JSON.stringify(toolCall.arguments, null, 2)}
+                    {argsJson}
                   </pre>
                 </div>
 
                 {/* 结果 */}
-                {toolCall.result && (
+                {resultText && (
                   <div className="mt-3">
                     <p className="text-xs text-muted-foreground mb-1 font-medium">结果</p>
                     <pre className="text-xs bg-black/30 rounded-lg p-3 overflow-x-auto font-mono text-foreground/80 max-h-60 overflow-y-auto whitespace-pre-wrap">
-                      {toolCall.result.length > 2000
-                        ? toolCall.result.slice(0, 2000) + "\n... [已截断]"
-                        : toolCall.result}
+                      {resultText.length > 2000
+                        ? resultText.slice(0, 2000) + "\n... [已截断]"
+                        : resultText}
                     </pre>
                   </div>
                 )}
