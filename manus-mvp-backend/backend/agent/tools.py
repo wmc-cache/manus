@@ -41,43 +41,64 @@ def _publish_event(event_type: str, data: dict, window_id: Optional[str] = None)
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY", "")
 
 async def web_search(query: str) -> str:
-    """使用 Tavily API 搜索网页"""
+    """优先使用 Tavily；无 key 时回退到 DuckDuckGo 搜索"""
     try:
-        from tavily import TavilyClient
+        if TAVILY_API_KEY:
+            from tavily import TavilyClient
 
-        client = TavilyClient(api_key=TAVILY_API_KEY)
+            client = TavilyClient(api_key=TAVILY_API_KEY)
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: client.search(
+                    query=query,
+                    max_results=5,
+                    search_depth="basic",
+                    include_answer=True,
+                )
+            )
+
+            results = response.get("results", [])
+            answer = response.get("answer", "")
+
+            if not results and not answer:
+                return f"搜索 \"{query}\" 未找到相关结果。请尝试换个关键词。"
+
+            output = f"搜索 \"{query}\" 的结果：\n\n"
+
+            if answer:
+                output += f"**AI 摘要：** {answer}\n\n---\n\n"
+
+            for i, r in enumerate(results, 1):
+                title = r.get("title", "无标题")
+                url = r.get("url", "")
+                snippet = r.get("content", "")
+                score = r.get("score", 0)
+                output += f"{i}. **{title}** (相关度: {score:.2f})\n"
+                output += f"   链接: {url}\n"
+                output += f"   摘要: {snippet[:300]}\n\n"
+
+            return output
+
+        from duckduckgo_search import DDGS
 
         loop = asyncio.get_event_loop()
-        response = await loop.run_in_executor(
+        results = await loop.run_in_executor(
             None,
-            lambda: client.search(
-                query=query,
-                max_results=5,
-                search_depth="basic",
-                include_answer=True,
-            )
+            lambda: list(DDGS().text(query, max_results=5))
         )
 
-        results = response.get("results", [])
-        answer = response.get("answer", "")
-
-        if not results and not answer:
+        if not results:
             return f"搜索 \"{query}\" 未找到相关结果。请尝试换个关键词。"
 
-        output = f"搜索 \"{query}\" 的结果：\n\n"
-
-        if answer:
-            output += f"**AI 摘要：** {answer}\n\n---\n\n"
-
+        output = f"搜索 \"{query}\" 的结果（DuckDuckGo）：\n\n"
         for i, r in enumerate(results, 1):
             title = r.get("title", "无标题")
-            url = r.get("url", "")
-            snippet = r.get("content", "")
-            score = r.get("score", 0)
-            output += f"{i}. **{title}** (相关度: {score:.2f})\n"
+            url = r.get("href", "")
+            snippet = r.get("body", "")
+            output += f"{i}. **{title}**\n"
             output += f"   链接: {url}\n"
             output += f"   摘要: {snippet[:300]}\n\n"
-
         return output
     except Exception as e:
         return f"搜索出错: {str(e)}。我可以基于已有知识为你提供相关信息。"

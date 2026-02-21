@@ -7,7 +7,7 @@ import type {
   ToolResultEventData,
 } from "@/types";
 
-const API_BASE = "https://8000-itkdfifzls856ffcqd5fz-9ad01bec.sg1.manus.computer";
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
 
 interface AgentState {
   messages: Message[];

@@ -20,16 +20,30 @@ class BrowserService:
         if self._is_ready and self._page:
             return
 
-        from playwright.async_api import async_playwright
-        self._playwright = await async_playwright().start()
-        self._browser = await self._playwright.chromium.launch(
-            headless=True,
-            args=["--no-sandbox", "--disable-setuid-sandbox"]
-        )
-        self._page = await self._browser.new_page(
-            viewport={"width": 1280, "height": 800}
-        )
-        self._is_ready = True
+        try:
+            from playwright.async_api import async_playwright
+        except ModuleNotFoundError as e:
+            raise RuntimeError(
+                "Playwright 未安装。请在后端虚拟环境执行: pip install playwright && playwright install chromium"
+            ) from e
+
+        try:
+            self._playwright = await async_playwright().start()
+            self._browser = await self._playwright.chromium.launch(
+                headless=True,
+                args=["--no-sandbox", "--disable-setuid-sandbox"]
+            )
+            self._page = await self._browser.new_page(
+                viewport={"width": 1280, "height": 800}
+            )
+            self._is_ready = True
+        except Exception as e:
+            err_msg = str(e)
+            if "Executable doesn't exist" in err_msg:
+                raise RuntimeError(
+                    "Chromium 未安装。请在后端虚拟环境执行: playwright install chromium"
+                ) from e
+            raise
 
     async def navigate(self, url: str, conversation_id: Optional[str] = None) -> Dict[str, Any]:
         """导航到指定 URL"""

@@ -4,8 +4,11 @@
  */
 import { useState, useEffect, useCallback, useRef } from "react";
 
-const WS_URL = "wss://8000-itkdfifzls856ffcqd5fz-9ad01bec.sg1.manus.computer/ws/sandbox";
-const API_BASE = "https://8000-itkdfifzls856ffcqd5fz-9ad01bec.sg1.manus.computer";
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
+const WS_BASE = API_BASE.startsWith("https://")
+  ? API_BASE.replace(/^https:/, "wss:")
+  : API_BASE.replace(/^http:/, "ws:");
+const WS_URL = `${WS_BASE}/ws/sandbox`;
 
 export interface SandboxEvent {
   type: string;

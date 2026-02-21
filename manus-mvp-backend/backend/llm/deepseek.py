@@ -1,11 +1,51 @@
 """DeepSeek API 封装 - 兼容 OpenAI SDK"""
 import os
 import json
+from pathlib import Path
 from typing import AsyncGenerator, List, Dict, Any, Optional
 from openai import AsyncOpenAI
 
+
+def _read_env_key_from_file(path: Path, key: str) -> str:
+    if not path.exists():
+        return ""
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            if k.strip() != key:
+                continue
+            value = v.strip().strip('"').strip("'")
+            if value:
+                return value
+    except Exception:
+        return ""
+    return ""
+
+
+def _resolve_deepseek_api_key() -> str:
+    # 优先使用显式环境变量
+    env_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+    if env_key:
+        return env_key
+
+    # 其次尝试后端本地 .env
+    backend_env = Path(__file__).resolve().parents[1] / ".env"
+    file_key = _read_env_key_from_file(backend_env, "DEEPSEEK_API_KEY")
+    if file_key:
+        return file_key
+
+    # 最后兼容当前仓库结构：读取前端目录的 .env
+    frontend_env = Path(__file__).resolve().parents[3] / "manus-frontend" / ".env"
+    return _read_env_key_from_file(frontend_env, "DEEPSEEK_API_KEY")
+
+
 # DeepSeek API 配置
-DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
+DEEPSEEK_API_KEY = _resolve_deepseek_api_key()
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_MODEL = "deepseek-chat"
 
@@ -172,6 +212,13 @@ async def chat_completion_stream(
     use_tools: bool = True,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """流式调用 DeepSeek API"""
+    if not DEEPSEEK_API_KEY:
+        yield {
+            "type": "error",
+            "data": "DEEPSEEK_API_KEY 未配置，请在环境变量或 .env 中设置后重启后端。"
+        }
+        return
+
     try:
         kwargs = {
             "model": DEEPSEEK_MODEL,
@@ -232,6 +279,12 @@ async def chat_completion(
     use_tools: bool = True,
 ) -> Dict[str, Any]:
     """非流式调用 DeepSeek API"""
+    if not DEEPSEEK_API_KEY:
+        return {
+            "content": "调用 LLM 时出错: DEEPSEEK_API_KEY 未配置，请在环境变量或 .env 中设置后重启后端。",
+            "tool_calls": []
+        }
+
     try:
         kwargs = {
             "model": DEEPSEEK_MODEL,
