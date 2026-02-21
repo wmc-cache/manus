@@ -9,7 +9,6 @@ import {
   Terminal,
   FileCode,
   Globe,
-  FolderTree,
   Wifi,
   WifiOff,
   Monitor,
@@ -42,7 +41,6 @@ const tabs: { id: ActiveWindow; label: string; icon: typeof Terminal }[] = [
   { id: "terminal", label: "终端", icon: Terminal },
   { id: "editor", label: "编辑器", icon: FileCode },
   { id: "browser", label: "浏览器", icon: Globe },
-  { id: "files", label: "文件", icon: FolderTree },
 ];
 
 export default function ComputerPanel({
@@ -126,9 +124,8 @@ export default function ComputerPanel({
           // 活跃指示 - 终端有输出、编辑器有文件、浏览器有截图
           let hasActivity = false;
           if (tab.id === "terminal" && terminalOutput) hasActivity = true;
-          if (tab.id === "editor" && editorFile) hasActivity = true;
+          if (tab.id === "editor" && (editorFile || fileTree.length > 0)) hasActivity = true;
           if (tab.id === "browser" && browserData?.screenshot) hasActivity = true;
-          if (tab.id === "files" && fileTree.length > 0) hasActivity = true;
 
           return (
             <button
@@ -167,17 +164,21 @@ export default function ComputerPanel({
               <TerminalWindow output={terminalOutput} onInput={onTerminalInput} />
             )}
             {activeWindow === "editor" && (
-              <EditorWindow file={editorFile} />
+              <div className="h-full flex gap-2">
+                <div className="w-[38%] min-w-[180px] max-w-[320px]">
+                  <FilesWindow
+                    tree={fileTree}
+                    onFileClick={onFileClick}
+                    onRefresh={onRefreshFiles}
+                  />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <EditorWindow file={editorFile} />
+                </div>
+              </div>
             )}
             {activeWindow === "browser" && (
               <BrowserWindow data={browserData} />
-            )}
-            {activeWindow === "files" && (
-              <FilesWindow
-                tree={fileTree}
-                onFileClick={onFileClick}
-                onRefresh={onRefreshFiles}
-              />
             )}
           </motion.div>
         </AnimatePresence>

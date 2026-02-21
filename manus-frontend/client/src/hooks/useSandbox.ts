@@ -50,7 +50,7 @@ export interface BrowserData {
   status?: number;
 }
 
-export type ActiveWindow = "terminal" | "editor" | "browser" | "files";
+export type ActiveWindow = "terminal" | "editor" | "browser";
 
 export function useSandbox() {
   const [connected, setConnected] = useState(false);
