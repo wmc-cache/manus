@@ -158,6 +158,187 @@ class BrowserService:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
+    async def click_by_coordinates(
+        self,
+        x: float,
+        y: float,
+        viewport_width: float,
+        viewport_height: float,
+        conversation_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """按截图坐标点击页面"""
+        await self._ensure_browser()
+        if not self._page:
+            return {"success": False, "error": "浏览器未就绪"}
+
+        try:
+            if viewport_width <= 0 or viewport_height <= 0:
+                return {"success": False, "error": "无效坐标参数"}
+
+            vp = self._page.viewport_size or {"width": int(viewport_width), "height": int(viewport_height)}
+            target_x = max(0.0, min(float(vp["width"]) - 1, float(x) * float(vp["width"]) / float(viewport_width)))
+            target_y = max(0.0, min(float(vp["height"]) - 1, float(y) * float(vp["height"]) / float(viewport_height)))
+
+            await self._page.mouse.click(target_x, target_y)
+            await asyncio.sleep(0.15)
+
+            screenshot_b64 = await self._take_screenshot()
+            title = await self._page.title()
+            url = self._page.url
+            self._current_url = url
+
+            await event_bus.publish(SandboxEvent(
+                "browser_clicked",
+                {
+                    "x": target_x,
+                    "y": target_y,
+                    "url": url,
+                    "title": title,
+                    "screenshot": screenshot_b64,
+                },
+                window_id="browser",
+                conversation_id=conversation_id,
+            ))
+
+            return {
+                "success": True,
+                "url": url,
+                "title": title,
+                "screenshot": screenshot_b64,
+            }
+        except Exception as e:
+            await event_bus.publish(SandboxEvent(
+                "browser_error",
+                {"error": str(e), "action": "click_by_coordinates"},
+                window_id="browser",
+                conversation_id=conversation_id,
+            ))
+            return {"success": False, "error": str(e)}
+
+    async def type_text(
+        self,
+        text: str,
+        submit: bool = False,
+        conversation_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """向当前焦点元素输入文本"""
+        await self._ensure_browser()
+        if not self._page:
+            return {"success": False, "error": "浏览器未就绪"}
+
+        try:
+            if text:
+                await self._page.keyboard.type(text, delay=10)
+            if submit:
+                await self._page.keyboard.press("Enter")
+
+            await asyncio.sleep(0.15)
+            screenshot_b64 = await self._take_screenshot()
+            title = await self._page.title()
+            url = self._page.url
+            self._current_url = url
+
+            await event_bus.publish(SandboxEvent(
+                "browser_screenshot",
+                {
+                    "url": url,
+                    "title": title,
+                    "screenshot": screenshot_b64,
+                },
+                window_id="browser",
+                conversation_id=conversation_id,
+            ))
+
+            return {"success": True, "url": url, "title": title, "screenshot": screenshot_b64}
+        except Exception as e:
+            await event_bus.publish(SandboxEvent(
+                "browser_error",
+                {"error": str(e), "action": "type_text"},
+                window_id="browser",
+                conversation_id=conversation_id,
+            ))
+            return {"success": False, "error": str(e)}
+
+    async def scroll(
+        self,
+        delta_y: float,
+        conversation_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """按指定距离滚动页面"""
+        await self._ensure_browser()
+        if not self._page:
+            return {"success": False, "error": "浏览器未就绪"}
+
+        try:
+            await self._page.mouse.wheel(0, delta_y)
+            await asyncio.sleep(0.1)
+
+            screenshot_b64 = await self._take_screenshot()
+            title = await self._page.title()
+            url = self._page.url
+            self._current_url = url
+
+            await event_bus.publish(SandboxEvent(
+                "browser_screenshot",
+                {
+                    "url": url,
+                    "title": title,
+                    "screenshot": screenshot_b64,
+                },
+                window_id="browser",
+                conversation_id=conversation_id,
+            ))
+
+            return {"success": True, "url": url, "title": title, "screenshot": screenshot_b64}
+        except Exception as e:
+            await event_bus.publish(SandboxEvent(
+                "browser_error",
+                {"error": str(e), "action": "scroll"},
+                window_id="browser",
+                conversation_id=conversation_id,
+            ))
+            return {"success": False, "error": str(e)}
+
+    async def press_key(
+        self,
+        key: str,
+        conversation_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """向页面发送按键"""
+        await self._ensure_browser()
+        if not self._page:
+            return {"success": False, "error": "浏览器未就绪"}
+
+        try:
+            await self._page.keyboard.press(key)
+            await asyncio.sleep(0.1)
+
+            screenshot_b64 = await self._take_screenshot()
+            title = await self._page.title()
+            url = self._page.url
+            self._current_url = url
+
+            await event_bus.publish(SandboxEvent(
+                "browser_screenshot",
+                {
+                    "url": url,
+                    "title": title,
+                    "screenshot": screenshot_b64,
+                },
+                window_id="browser",
+                conversation_id=conversation_id,
+            ))
+
+            return {"success": True, "url": url, "title": title, "screenshot": screenshot_b64}
+        except Exception as e:
+            await event_bus.publish(SandboxEvent(
+                "browser_error",
+                {"error": str(e), "action": "press_key", "key": key},
+                window_id="browser",
+                conversation_id=conversation_id,
+            ))
+            return {"success": False, "error": str(e)}
+
     async def close(self):
         """关闭浏览器"""
         if self._browser:

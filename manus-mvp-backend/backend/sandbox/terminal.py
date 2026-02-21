@@ -14,9 +14,15 @@ from sandbox.event_bus import event_bus, SandboxEvent
 class TerminalSession:
     """单个终端会话"""
 
-    def __init__(self, session_id: str, cwd: str = "/tmp/manus_workspace"):
+    def __init__(
+        self,
+        session_id: str,
+        cwd: str = "/tmp/manus_workspace",
+        conversation_id: Optional[str] = None,
+    ):
         self.session_id = session_id
         self.cwd = cwd
+        self.conversation_id = conversation_id
         self.master_fd: Optional[int] = None
         self.pid: Optional[int] = None
         self.is_alive = False
@@ -55,7 +61,8 @@ class TerminalSession:
             await event_bus.publish(SandboxEvent(
                 "terminal_started",
                 {"session_id": self.session_id},
-                window_id=f"terminal_{self.session_id}"
+                window_id=f"terminal_{self.session_id}",
+                conversation_id=self.conversation_id,
             ))
 
     def _set_size(self, cols: int, rows: int):
@@ -86,7 +93,8 @@ class TerminalSession:
                                 "session_id": self.session_id,
                                 "data": text,
                             },
-                            window_id=f"terminal_{self.session_id}"
+                            window_id=f"terminal_{self.session_id}",
+                            conversation_id=self.conversation_id,
                         ))
                     else:
                         # EOF
@@ -159,7 +167,8 @@ class TerminalSession:
         await event_bus.publish(SandboxEvent(
             "terminal_stopped",
             {"session_id": self.session_id},
-            window_id=f"terminal_{self.session_id}"
+            window_id=f"terminal_{self.session_id}",
+            conversation_id=self.conversation_id,
         ))
 
     def get_buffer(self) -> str:
@@ -174,22 +183,32 @@ class TerminalManager:
         self.sessions: Dict[str, TerminalSession] = {}
         self._counter = 0
 
-    async def create_session(self, session_id: Optional[str] = None) -> TerminalSession:
+    async def create_session(
+        self,
+        session_id: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+    ) -> TerminalSession:
         """创建新的终端会话"""
         if session_id is None:
             self._counter += 1
             session_id = f"term_{self._counter}"
 
-        session = TerminalSession(session_id)
+        session = TerminalSession(session_id, conversation_id=conversation_id)
         await session.start()
         self.sessions[session_id] = session
         return session
 
-    async def get_or_create(self, session_id: str = "default") -> TerminalSession:
+    async def get_or_create(
+        self,
+        session_id: str = "default",
+        conversation_id: Optional[str] = None,
+    ) -> TerminalSession:
         """获取或创建终端会话"""
         if session_id in self.sessions and self.sessions[session_id].is_alive:
+            if conversation_id:
+                self.sessions[session_id].conversation_id = conversation_id
             return self.sessions[session_id]
-        return await self.create_session(session_id)
+        return await self.create_session(session_id, conversation_id=conversation_id)
 
     async def close_session(self, session_id: str):
         """关闭终端会话"""

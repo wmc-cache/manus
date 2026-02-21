@@ -51,6 +51,7 @@ export interface BrowserData {
 }
 
 export type ActiveWindow = "terminal" | "editor" | "browser";
+export type ManualTakeoverTarget = "all" | "terminal" | "browser";
 
 export function useSandbox() {
   const [connected, setConnected] = useState(false);
@@ -60,6 +61,10 @@ export function useSandbox() {
   const [editorFile, setEditorFile] = useState<FileContent | null>(null);
   const [fileTree, setFileTree] = useState<FileNode[]>([]);
   const [events, setEvents] = useState<SandboxEvent[]>([]);
+  const [manualTakeoverEnabled, setManualTakeoverEnabled] = useState(false);
+  const [manualTakeoverTarget, setManualTakeoverTarget] = useState<ManualTakeoverTarget>("all");
+  const [manualBlockedReason, setManualBlockedReason] = useState<string | null>(null);
+  const [browserInteractionError, setBrowserInteractionError] = useState<string | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -96,6 +101,10 @@ export function useSandbox() {
     setFileTree([]);
     setEvents([]);
     setActiveWindow("terminal");
+    setManualTakeoverEnabled(false);
+    setManualTakeoverTarget("all");
+    setManualBlockedReason(null);
+    setBrowserInteractionError(null);
 
     // 通知后端 WebSocket 切换订阅
     if (wsRef.current?.readyState === WebSocket.OPEN && conversationId) {
@@ -169,6 +178,7 @@ export function useSandbox() {
                 title: "加载中...",
                 screenshot: prev?.screenshot || "",
               }));
+              setBrowserInteractionError(null);
               setActiveWindow("browser");
               break;
 
@@ -181,7 +191,35 @@ export function useSandbox() {
                 screenshot: (data.data.screenshot as string) || "",
                 status: data.data.status as number,
               });
+              setBrowserInteractionError(null);
               setActiveWindow("browser");
+              break;
+
+            case "manual_takeover_changed":
+            {
+                const rawTarget = (data.data.target as string) || "all";
+                const target: ManualTakeoverTarget =
+                  rawTarget === "browser" || rawTarget === "terminal" || rawTarget === "all"
+                    ? rawTarget
+                    : "all";
+                setManualTakeoverEnabled(Boolean(data.data.enabled));
+                setManualTakeoverTarget(target);
+                if (!data.data.enabled) {
+                  setManualBlockedReason(null);
+                }
+            }
+              break;
+
+            case "manual_blocked_tool_call":
+              setManualBlockedReason((data.data.reason as string) || "已阻断自动工具调用");
+              break;
+
+            case "browser_interaction_result":
+              if (data.data.ok) {
+                setBrowserInteractionError(null);
+              } else {
+                setBrowserInteractionError((data.data.error as string) || "浏览器交互失败");
+              }
               break;
 
             case "file_opened":
@@ -227,9 +265,74 @@ export function useSandbox() {
           type: "terminal_input",
           session_id: "default",
           data,
+          conversation_id: currentConvIdRef.current,
         })
       );
     }
+  }, []);
+
+  const setManualTakeover = useCallback((enabled: boolean, target: ManualTakeoverTarget = "all") => {
+    const convId = currentConvIdRef.current;
+    if (!convId || wsRef.current?.readyState !== WebSocket.OPEN) return;
+
+    setManualTakeoverEnabled(enabled);
+    setManualTakeoverTarget(target);
+    setManualBlockedReason(null);
+
+    wsRef.current.send(JSON.stringify({
+      type: "manual_takeover",
+      enabled,
+      target,
+      conversation_id: convId,
+    }));
+  }, []);
+
+  const browserClick = useCallback((x: number, y: number, viewportWidth: number, viewportHeight: number) => {
+    const convId = currentConvIdRef.current;
+    if (!convId || wsRef.current?.readyState !== WebSocket.OPEN) return;
+
+    wsRef.current.send(JSON.stringify({
+      type: "browser_click",
+      x,
+      y,
+      viewport_width: viewportWidth,
+      viewport_height: viewportHeight,
+      conversation_id: convId,
+    }));
+  }, []);
+
+  const browserType = useCallback((text: string, submit = false) => {
+    const convId = currentConvIdRef.current;
+    if (!convId || wsRef.current?.readyState !== WebSocket.OPEN) return;
+
+    wsRef.current.send(JSON.stringify({
+      type: "browser_type",
+      text,
+      submit,
+      conversation_id: convId,
+    }));
+  }, []);
+
+  const browserScroll = useCallback((deltaY: number) => {
+    const convId = currentConvIdRef.current;
+    if (!convId || wsRef.current?.readyState !== WebSocket.OPEN) return;
+
+    wsRef.current.send(JSON.stringify({
+      type: "browser_scroll",
+      delta_y: deltaY,
+      conversation_id: convId,
+    }));
+  }, []);
+
+  const browserKey = useCallback((key: "Enter" | "Tab" | "Escape") => {
+    const convId = currentConvIdRef.current;
+    if (!convId || wsRef.current?.readyState !== WebSocket.OPEN) return;
+
+    wsRef.current.send(JSON.stringify({
+      type: "browser_key",
+      key,
+      conversation_id: convId,
+    }));
   }, []);
 
   // 获取文件内容（点击文件时调用，带 conversation_id）
@@ -270,7 +373,16 @@ export function useSandbox() {
     editorFile,
     fileTree,
     events,
+    manualTakeoverEnabled,
+    manualTakeoverTarget,
+    manualBlockedReason,
+    browserInteractionError,
+    setManualTakeover,
     sendTerminalInput,
+    browserClick,
+    browserType,
+    browserScroll,
+    browserKey,
     fetchFileTree,
     fetchFileContent,
     switchConversation,

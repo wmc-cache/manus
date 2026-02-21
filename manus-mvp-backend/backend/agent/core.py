@@ -10,6 +10,7 @@ from models.schemas import (
 )
 from llm.deepseek import chat_completion, chat_completion_stream
 from agent.tools import execute_tool
+from sandbox.event_bus import event_bus, SandboxEvent
 
 
 MAX_ITERATIONS = 10  # 最大迭代次数，防止无限循环
@@ -104,6 +105,17 @@ class AgentEngine:
                 })
         return messages
 
+    @staticmethod
+    def _is_tool_blocked_by_takeover(tool_name: str, target: str) -> bool:
+        normalized = (target or "all").strip().lower()
+        if normalized == "all":
+            return True
+        if normalized == "terminal":
+            return tool_name in {"shell_exec", "execute_code"}
+        if normalized == "browser":
+            return tool_name.startswith("browser_")
+        return True
+
     async def run_agent_loop(
         self,
         user_message: str,
@@ -143,9 +155,11 @@ class AgentEngine:
         completed = False
         limit_notice = ""
         stop_due_invalid_args = False
+        stop_due_manual_takeover = False
         invalid_args_fail_count = 0
         last_invalid_tool_name = ""
         last_invalid_reason = ""
+        manual_blocked_notice = ""
         while iteration < MAX_ITERATIONS:
             iteration += 1
 
@@ -245,42 +259,71 @@ class AgentEngine:
                         }, ensure_ascii=False)
                     }
 
-                    parse_error = tool_call_parse_errors.get(tc.id)
-                    if parse_error:
-                        preview = tool_call_parse_previews.get(tc.id, "")
-                        result = (
-                            f"工具执行失败: 模型生成的 `{tc.name}` 参数不是合法 JSON。"
-                            f"原因: {parse_error}"
-                            "。这通常是因为内容过长导致参数被截断。"
+                    if (
+                        conversation.manual_takeover_enabled
+                        and self._is_tool_blocked_by_takeover(
+                            tc.name,
+                            conversation.manual_takeover_target,
                         )
-                        if preview:
-                            result += f"\n参数片段: {preview}"
+                    ):
+                        reason = (
+                            f"当前处于手动接管模式（{conversation.manual_takeover_target}），"
+                            "已暂停 Agent 自动工具调用。"
+                        )
+                        result = f"工具执行已阻断: {reason}"
                         tc.result = result
                         tc.status = ToolCallStatus.FAILED
-                        invalid_args_fail_count += 1
-                        last_invalid_tool_name = tc.name
-                        last_invalid_reason = "parse_error"
+                        stop_due_manual_takeover = True
+                        manual_blocked_notice = (
+                            "当前是手动接管模式，我已暂停自动执行。"
+                            "\n你可以在右侧直接操作计算机；操作完成后点击“释放接管”再让我继续。"
+                        )
+                        await event_bus.publish(SandboxEvent(
+                            "manual_blocked_tool_call",
+                            {
+                                "tool_name": tc.name,
+                                "reason": reason,
+                            },
+                            window_id="computer_control",
+                            conversation_id=conversation.id,
+                        ))
                     else:
-                        # 执行工具（传递 conversation_id 实现会话隔离）
-                        try:
-                            result = await execute_tool(tc.name, tc.arguments, conversation_id=conversation.id)
-                            tc.result = result
-                            tc.status = ToolCallStatus.COMPLETED
-                        except Exception as e:
-                            err_text = str(e)
-                            result = f"工具执行失败: {err_text}"
+                        parse_error = tool_call_parse_errors.get(tc.id)
+                        if parse_error:
+                            preview = tool_call_parse_previews.get(tc.id, "")
+                            result = (
+                                f"工具执行失败: 模型生成的 `{tc.name}` 参数不是合法 JSON。"
+                                f"原因: {parse_error}"
+                                "。这通常是因为内容过长导致参数被截断。"
+                            )
+                            if preview:
+                                result += f"\n参数片段: {preview}"
                             tc.result = result
                             tc.status = ToolCallStatus.FAILED
+                            invalid_args_fail_count += 1
+                            last_invalid_tool_name = tc.name
+                            last_invalid_reason = "parse_error"
+                        else:
+                            # 执行工具（传递 conversation_id 实现会话隔离）
+                            try:
+                                result = await execute_tool(tc.name, tc.arguments, conversation_id=conversation.id)
+                                tc.result = result
+                                tc.status = ToolCallStatus.COMPLETED
+                            except Exception as e:
+                                err_text = str(e)
+                                result = f"工具执行失败: {err_text}"
+                                tc.result = result
+                                tc.status = ToolCallStatus.FAILED
 
-                            if (
-                                "缺少必填参数" in err_text
-                                or "参数不能为空" in err_text
-                                or "参数类型错误" in err_text
-                                or "参数格式错误" in err_text
-                            ):
-                                invalid_args_fail_count += 1
-                                last_invalid_tool_name = tc.name
-                                last_invalid_reason = "invalid_args"
+                                if (
+                                    "缺少必填参数" in err_text
+                                    or "参数不能为空" in err_text
+                                    or "参数类型错误" in err_text
+                                    or "参数格式错误" in err_text
+                                ):
+                                    invalid_args_fail_count += 1
+                                    last_invalid_tool_name = tc.name
+                                    last_invalid_reason = "invalid_args"
 
                     # 通知前端工具调用结果
                     yield {
@@ -308,10 +351,31 @@ class AgentEngine:
                     conversation.messages.append(tool_msg)
                     self._save_conversations()
 
+                    if stop_due_manual_takeover:
+                        break
+
                     # 连续参数错误时停止自动重试，避免空参数死循环
                     if invalid_args_fail_count >= 2:
                         stop_due_invalid_args = True
                         break
+
+                if stop_due_manual_takeover:
+                    conversation.messages.append(
+                        Message(
+                            role=MessageRole.ASSISTANT,
+                            content=manual_blocked_notice
+                        )
+                    )
+                    self._save_conversations()
+                    yield {
+                        "event": SSEEventType.CONTENT,
+                        "data": json.dumps({
+                            "content": manual_blocked_notice,
+                            "type": "final_answer"
+                        }, ensure_ascii=False)
+                    }
+                    completed = True
+                    break
 
                 if stop_due_invalid_args:
                     if last_invalid_reason == "parse_error":

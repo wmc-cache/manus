@@ -5,6 +5,7 @@
  * 风格: Chrome 风格 + 毛玻璃 + 地址栏
  */
 import { Globe, RefreshCw, Lock, ExternalLink } from "lucide-react";
+import { useRef, useState } from "react";
 
 interface BrowserWindowProps {
   data: {
@@ -13,9 +14,33 @@ interface BrowserWindowProps {
     screenshot: string; // base64
     status?: number;
   } | null;
+  manualTakeoverEnabled?: boolean;
+  onPageClick?: (x: number, y: number, viewportWidth: number, viewportHeight: number) => void;
+  onTypeText?: (text: string, submit?: boolean) => void;
+  onScrollPage?: (deltaY: number) => void;
+  onPressKey?: (key: "Enter" | "Tab" | "Escape") => void;
+  interactionError?: string | null;
 }
 
-export default function BrowserWindow({ data }: BrowserWindowProps) {
+export default function BrowserWindow({
+  data,
+  manualTakeoverEnabled = false,
+  onPageClick,
+  onTypeText,
+  onScrollPage,
+  onPressKey,
+  interactionError,
+}: BrowserWindowProps) {
+  const screenshotRef = useRef<HTMLImageElement | null>(null);
+  const [typingText, setTypingText] = useState("");
+
+  const submitTyping = (submit = false) => {
+    const text = typingText;
+    if (!onTypeText || (!text.trim() && !submit)) return;
+    onTypeText(text, submit);
+    setTypingText("");
+  };
+
   if (!data) {
     return (
       <div className="h-full flex items-center justify-center bg-[oklch(0.1_0.01_260)] rounded-lg">
@@ -78,13 +103,72 @@ export default function BrowserWindow({ data }: BrowserWindowProps) {
         )}
       </div>
 
+      {/* 手动操控栏 */}
+      <div className="flex items-center gap-2 px-3 py-1.5 bg-[oklch(0.12_0.012_260)] border-b border-border/20">
+        <div
+          className={`text-[10px] px-1.5 py-0.5 rounded ${
+            manualTakeoverEnabled
+              ? "bg-emerald-500/15 text-emerald-400"
+              : "bg-muted/40 text-muted-foreground"
+          }`}
+        >
+          {manualTakeoverEnabled ? "手动接管中" : "只读模式"}
+        </div>
+
+        <input
+          value={typingText}
+          onChange={(e) => setTypingText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              submitTyping(false);
+            }
+          }}
+          disabled={!manualTakeoverEnabled}
+          placeholder={manualTakeoverEnabled ? "向页面输入文本..." : "开启接管后可输入"}
+          className="flex-1 h-7 rounded px-2 text-xs bg-[oklch(0.16_0.014_260)] border border-border/20 outline-none disabled:opacity-60"
+        />
+
+        <button
+          onClick={() => submitTyping(false)}
+          disabled={!manualTakeoverEnabled || !typingText.trim()}
+          className="h-7 px-2 text-[10px] rounded bg-primary/20 text-primary disabled:opacity-40"
+        >
+          输入
+        </button>
+        <button
+          onClick={() => onPressKey?.("Enter")}
+          disabled={!manualTakeoverEnabled}
+          className="h-7 px-2 text-[10px] rounded bg-primary/20 text-primary disabled:opacity-40"
+        >
+          Enter
+        </button>
+      </div>
+
       {/* 页面截图 */}
-      <div className="flex-1 overflow-auto bg-white">
+      <div
+        className="flex-1 overflow-auto bg-white"
+        onWheel={(e) => {
+          if (!manualTakeoverEnabled || !onScrollPage) return;
+          e.preventDefault();
+          onScrollPage(e.deltaY);
+        }}
+      >
         {data.screenshot ? (
           <img
+            ref={screenshotRef}
             src={`data:image/jpeg;base64,${data.screenshot}`}
             alt={data.title}
-            className="w-full h-auto"
+            className={`w-full h-auto ${
+              manualTakeoverEnabled ? "cursor-crosshair" : "cursor-default"
+            }`}
+            onClick={(e) => {
+              if (!manualTakeoverEnabled || !onPageClick || !screenshotRef.current) return;
+              const rect = screenshotRef.current.getBoundingClientRect();
+              const x = e.clientX - rect.left;
+              const y = e.clientY - rect.top;
+              onPageClick(x, y, rect.width, rect.height);
+            }}
           />
         ) : isLoading ? (
           <div className="h-full flex items-center justify-center bg-[oklch(0.1_0.01_260)]">
@@ -99,6 +183,12 @@ export default function BrowserWindow({ data }: BrowserWindowProps) {
           </div>
         )}
       </div>
+
+      {interactionError && (
+        <div className="px-3 py-1.5 text-[10px] text-red-300 bg-red-500/10 border-t border-red-500/20">
+          {interactionError}
+        </div>
+      )}
 
       {/* 状态栏 */}
       {data.status !== undefined && data.status > 0 && (

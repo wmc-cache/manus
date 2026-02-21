@@ -96,6 +96,7 @@ export default function Home() {
   );
 
   const hasMessages = messages.length > 0;
+  const manualTakeoverActive = sandbox.manualTakeoverEnabled;
 
   return (
     <div
@@ -143,9 +144,15 @@ export default function Home() {
 
               {hasMessages && (
                 <div className="flex items-center gap-2">
-                  <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                  <div
+                    className={`w-2 h-2 rounded-full animate-pulse ${
+                      manualTakeoverActive ? "bg-amber-400" : "bg-emerald-400"
+                    }`}
+                  />
                   <span className="text-sm text-muted-foreground">
-                    {isLoading ? "Agent 工作中..." : "就绪"}
+                    {manualTakeoverActive
+                      ? "手动接管中"
+                      : (isLoading ? "Agent 工作中..." : "就绪")}
                   </span>
                 </div>
               )}
@@ -205,12 +212,25 @@ export default function Home() {
                   </div>
                 )}
 
+                {sandbox.manualBlockedReason && (
+                  <div className="mx-4 my-2 p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-sm text-amber-200">
+                    {sandbox.manualBlockedReason}
+                  </div>
+                )}
+
                 <div ref={messagesEndRef} />
               </div>
             )}
           </div>
 
           {/* 输入区域 */}
+          {manualTakeoverActive && (
+            <div className="mx-auto w-full max-w-3xl px-4">
+              <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                当前为手动接管模式，Agent 自动工具调用会暂停。完成后请在右侧点击“接管中”释放接管，再继续让 Agent 执行。
+              </div>
+            </div>
+          )}
           <ChatInput
             onSend={sendMessage}
             onContinue={continueAgent}
@@ -243,6 +263,14 @@ export default function Home() {
                 fileTree={sandbox.fileTree}
                 onFileClick={sandbox.fetchFileContent}
                 onRefreshFiles={sandbox.fetchFileTree}
+                manualTakeoverEnabled={sandbox.manualTakeoverEnabled}
+                manualTakeoverTarget={sandbox.manualTakeoverTarget}
+                onToggleManualTakeover={sandbox.setManualTakeover}
+                onBrowserClick={sandbox.browserClick}
+                onBrowserType={sandbox.browserType}
+                onBrowserScroll={sandbox.browserScroll}
+                onBrowserKey={sandbox.browserKey}
+                browserInteractionError={sandbox.browserInteractionError}
                 onClose={() => setComputerOpen(false)}
               />
             </motion.div>

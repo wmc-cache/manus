@@ -15,13 +15,20 @@ import {
   Maximize2,
   Minimize2,
   X,
+  Hand,
 } from "lucide-react";
 import { useState } from "react";
 import TerminalWindow from "./TerminalWindow";
 import EditorWindow from "./EditorWindow";
 import BrowserWindow from "./BrowserWindow";
 import FilesWindow from "./FilesWindow";
-import type { ActiveWindow, FileNode, FileContent, BrowserData } from "@/hooks/useSandbox";
+import type {
+  ActiveWindow,
+  FileNode,
+  FileContent,
+  BrowserData,
+  ManualTakeoverTarget,
+} from "@/hooks/useSandbox";
 
 interface ComputerPanelProps {
   connected: boolean;
@@ -34,6 +41,14 @@ interface ComputerPanelProps {
   fileTree: FileNode[];
   onFileClick?: (path: string) => void;
   onRefreshFiles?: () => void;
+  manualTakeoverEnabled?: boolean;
+  manualTakeoverTarget?: ManualTakeoverTarget;
+  onToggleManualTakeover?: (enabled: boolean, target?: ManualTakeoverTarget) => void;
+  onBrowserClick?: (x: number, y: number, viewportWidth: number, viewportHeight: number) => void;
+  onBrowserType?: (text: string, submit?: boolean) => void;
+  onBrowserScroll?: (deltaY: number) => void;
+  onBrowserKey?: (key: "Enter" | "Tab" | "Escape") => void;
+  browserInteractionError?: string | null;
   onClose?: () => void;
 }
 
@@ -54,6 +69,14 @@ export default function ComputerPanel({
   fileTree,
   onFileClick,
   onRefreshFiles,
+  manualTakeoverEnabled = false,
+  manualTakeoverTarget = "all",
+  onToggleManualTakeover,
+  onBrowserClick,
+  onBrowserType,
+  onBrowserScroll,
+  onBrowserKey,
+  browserInteractionError,
   onClose,
 }: ComputerPanelProps) {
   const [isMaximized, setIsMaximized] = useState(false);
@@ -94,6 +117,20 @@ export default function ComputerPanel({
         </div>
 
         <div className="flex items-center gap-1">
+          <button
+            onClick={() => onToggleManualTakeover?.(!manualTakeoverEnabled, manualTakeoverTarget)}
+            className={`px-2 py-1 rounded text-[10px] transition-colors ${
+              manualTakeoverEnabled
+                ? "bg-emerald-500/20 text-emerald-300"
+                : "bg-muted/40 text-muted-foreground"
+            }`}
+            title={manualTakeoverEnabled ? "释放手动接管" : "开启手动接管"}
+          >
+            <span className="inline-flex items-center gap-1">
+              <Hand className="w-3 h-3" />
+              {manualTakeoverEnabled ? "接管中" : "接管"}
+            </span>
+          </button>
           <button
             onClick={() => setIsMaximized(!isMaximized)}
             className="p-1 rounded hover:bg-accent/30 transition-colors"
@@ -161,7 +198,11 @@ export default function ComputerPanel({
             className="h-full"
           >
             {activeWindow === "terminal" && (
-              <TerminalWindow output={terminalOutput} onInput={onTerminalInput} />
+              <TerminalWindow
+                output={terminalOutput}
+                onInput={onTerminalInput}
+                manualTakeoverEnabled={manualTakeoverEnabled}
+              />
             )}
             {activeWindow === "editor" && (
               <div className="h-full flex gap-2">
@@ -178,7 +219,15 @@ export default function ComputerPanel({
               </div>
             )}
             {activeWindow === "browser" && (
-              <BrowserWindow data={browserData} />
+              <BrowserWindow
+                data={browserData}
+                manualTakeoverEnabled={manualTakeoverEnabled}
+                onPageClick={onBrowserClick}
+                onTypeText={onBrowserType}
+                onScrollPage={onBrowserScroll}
+                onPressKey={onBrowserKey}
+                interactionError={browserInteractionError}
+              />
             )}
           </motion.div>
         </AnimatePresence>

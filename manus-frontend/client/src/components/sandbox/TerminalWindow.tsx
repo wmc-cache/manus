@@ -6,15 +6,22 @@
  */
 import { useRef, useEffect, useMemo } from "react";
 import { Terminal as TerminalIcon } from "lucide-react";
+import { useState } from "react";
 
 interface TerminalWindowProps {
   output: string;
   onInput?: (data: string) => void;
+  manualTakeoverEnabled?: boolean;
 }
 
-export default function TerminalWindow({ output, onInput }: TerminalWindowProps) {
+export default function TerminalWindow({
+  output,
+  onInput,
+  manualTakeoverEnabled = false,
+}: TerminalWindowProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const [command, setCommand] = useState("");
 
   // 自动滚动到底部
   useEffect(() => {
@@ -38,6 +45,13 @@ export default function TerminalWindow({ output, onInput }: TerminalWindowProps)
       return { text: line, className, key: i };
     });
   }, [output]);
+
+  const submitCommand = () => {
+    const text = command.trim();
+    if (!manualTakeoverEnabled || !text || !onInput) return;
+    onInput(`${text}\n`);
+    setCommand("");
+  };
 
   return (
     <div className="h-full flex flex-col bg-[oklch(0.1_0.01_260)] rounded-lg overflow-hidden">
@@ -81,6 +95,32 @@ export default function TerminalWindow({ output, onInput }: TerminalWindowProps)
           </>
         )}
         <div ref={bottomRef} />
+      </div>
+
+      <div className="border-t border-border/20 p-2 bg-[oklch(0.12_0.012_260)]">
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-sky-400 font-mono">$</span>
+          <input
+            value={command}
+            onChange={(e) => setCommand(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                submitCommand();
+              }
+            }}
+            disabled={!manualTakeoverEnabled}
+            placeholder={manualTakeoverEnabled ? "输入命令并回车执行..." : "开启接管后可输入命令"}
+            className="flex-1 bg-transparent text-xs text-foreground font-mono outline-none placeholder:text-muted-foreground/50 disabled:opacity-60"
+          />
+          <button
+            onClick={submitCommand}
+            disabled={!manualTakeoverEnabled || !command.trim()}
+            className="text-[10px] px-2 py-1 rounded bg-primary/20 text-primary disabled:opacity-30"
+          >
+            发送
+          </button>
+        </div>
       </div>
     </div>
   );

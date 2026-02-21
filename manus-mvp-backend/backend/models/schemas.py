@@ -35,7 +35,7 @@ class ChatRequest(BaseModel):
 class ToolCall(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4())[:8])
     name: str
-    arguments: dict = {}
+    arguments: dict = Field(default_factory=dict)
     result: Optional[Any] = None
     status: ToolCallStatus = ToolCallStatus.PENDING
 
@@ -48,7 +48,7 @@ class PlanPhase(BaseModel):
 
 class TaskPlan(BaseModel):
     goal: str
-    phases: List[PlanPhase] = []
+    phases: List[PlanPhase] = Field(default_factory=list)
     current_phase_id: Optional[int] = None
 
 
@@ -56,7 +56,7 @@ class Message(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     role: MessageRole
     content: str = ""
-    tool_calls: List[ToolCall] = []
+    tool_calls: List[ToolCall] = Field(default_factory=list)
     thinking: Optional[str] = None
     timestamp: datetime = Field(default_factory=datetime.now)
 
@@ -64,8 +64,10 @@ class Message(BaseModel):
 class Conversation(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     title: str = "新对话"
-    messages: List[Message] = []
+    messages: List[Message] = Field(default_factory=list)
     plan: Optional[TaskPlan] = None
+    manual_takeover_enabled: bool = False
+    manual_takeover_target: str = "all"
     created_at: datetime = Field(default_factory=datetime.now)
 
 
