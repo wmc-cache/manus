@@ -261,7 +261,7 @@ class AgentEngine:
                         last_invalid_tool_name = tc.name
                         last_invalid_reason = "parse_error"
                     else:
-                    # 执行工具（传递 conversation_id 实现会话隔离）
+                        # 执行工具（传递 conversation_id 实现会话隔离）
                         try:
                             result = await execute_tool(tc.name, tc.arguments, conversation_id=conversation.id)
                             tc.result = result
