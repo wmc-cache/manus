@@ -10,14 +10,35 @@ import {
   Zap,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import type { Conversation } from "@/types";
 import { toast } from "sonner";
 
 interface SidebarProps {
   onNewChat: () => void;
+  conversations: Conversation[];
+  activeConversationId: string | null;
+  onSelectConversation?: (id: string) => void;
   isCollapsed?: boolean;
 }
 
-export default function Sidebar({ onNewChat, isCollapsed }: SidebarProps) {
+function formatConversationMeta(conv: Conversation): string {
+  const count = conv.messageCount ?? conv.messages.length;
+  const date = conv.createdAt ? new Date(conv.createdAt) : null;
+  if (!date || Number.isNaN(date.getTime())) {
+    return `${count} 条消息`;
+  }
+  const hh = String(date.getHours()).padStart(2, "0");
+  const mm = String(date.getMinutes()).padStart(2, "0");
+  return `${count} 条消息 · ${hh}:${mm}`;
+}
+
+export default function Sidebar({
+  onNewChat,
+  conversations,
+  activeConversationId,
+  onSelectConversation,
+  isCollapsed,
+}: SidebarProps) {
   if (isCollapsed) return null;
 
   return (
@@ -57,13 +78,41 @@ export default function Sidebar({ onNewChat, isCollapsed }: SidebarProps) {
         <p className="text-xs text-muted-foreground/50 px-2 mb-2 font-medium">
           最近对话
         </p>
-        {/* 对话列表项会在有对话时显示 */}
-        <div className="space-y-1">
-          <div className="flex items-center gap-2 px-2 py-2 rounded-lg text-muted-foreground/40 text-xs">
-            <MessageSquare className="w-3.5 h-3.5" />
-            <span>暂无对话记录</span>
+        {conversations.length === 0 ? (
+          <div className="space-y-1">
+            <div className="flex items-center gap-2 px-2 py-2 rounded-lg text-muted-foreground/40 text-xs">
+              <MessageSquare className="w-3.5 h-3.5" />
+              <span>暂无对话记录</span>
+            </div>
           </div>
-        </div>
+        ) : (
+          <div className="space-y-1">
+            {conversations.map((conv) => {
+              const active = conv.id === activeConversationId;
+              return (
+                <button
+                  key={conv.id}
+                  onClick={() => onSelectConversation?.(conv.id)}
+                  className={`w-full text-left px-2.5 py-2 rounded-lg border transition-colors ${
+                    active
+                      ? "bg-primary/10 border-primary/30"
+                      : "bg-transparent border-transparent hover:bg-accent/40"
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <MessageSquare className={`w-3.5 h-3.5 ${active ? "text-primary" : "text-muted-foreground/70"}`} />
+                    <span className={`text-xs truncate ${active ? "text-foreground" : "text-foreground/90"}`}>
+                      {conv.title || "新对话"}
+                    </span>
+                  </div>
+                  <div className="text-[10px] mt-1 pl-[22px] text-muted-foreground/60">
+                    {formatConversationMeta(conv)}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* 底部设置 */}

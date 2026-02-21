@@ -1,6 +1,8 @@
 """Agent 核心引擎 - 实现 Agent Loop"""
 import json
 import asyncio
+import os
+from pathlib import Path
 from typing import AsyncGenerator, Dict, Any, List, Optional
 from models.schemas import (
     SSEEventType, Conversation, Message, MessageRole,
@@ -11,6 +13,7 @@ from agent.tools import execute_tool
 
 
 MAX_ITERATIONS = 10  # 最大迭代次数，防止无限循环
+DEFAULT_CONVERSATION_STORE = "/tmp/manus_workspace/conversations.json"
 
 
 class AgentEngine:
@@ -18,6 +21,45 @@ class AgentEngine:
 
     def __init__(self):
         self.conversations: Dict[str, Conversation] = {}
+        self._store_path = Path(os.environ.get("MANUS_CONVERSATIONS_FILE", DEFAULT_CONVERSATION_STORE))
+        self._store_path.parent.mkdir(parents=True, exist_ok=True)
+        self._load_conversations()
+
+    def _load_conversations(self):
+        """从磁盘加载历史会话"""
+        if not self._store_path.exists():
+            return
+
+        try:
+            payload = json.loads(self._store_path.read_text(encoding="utf-8"))
+            items = payload.get("conversations", [])
+            loaded: Dict[str, Conversation] = {}
+            for raw in items:
+                conv = Conversation.model_validate(raw)
+                loaded[conv.id] = conv
+            self.conversations = loaded
+        except Exception:
+            # 文件损坏或格式不兼容时，不阻塞服务启动
+            self.conversations = {}
+
+    def _save_conversations(self):
+        """将会话持久化到磁盘"""
+        try:
+            data = {
+                "conversations": [
+                    conv.model_dump(mode="json")
+                    for conv in self.conversations.values()
+                ]
+            }
+            tmp_path = self._store_path.with_suffix(".tmp")
+            tmp_path.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2),
+                encoding="utf-8"
+            )
+            tmp_path.replace(self._store_path)
+        except Exception:
+            # 不因持久化异常中断主流程
+            pass
 
     def get_or_create_conversation(self, conversation_id: Optional[str] = None) -> Conversation:
         """获取或创建对话"""
@@ -25,6 +67,7 @@ class AgentEngine:
             return self.conversations[conversation_id]
         conv = Conversation()
         self.conversations[conv.id] = conv
+        self._save_conversations()
         return conv
 
     def _build_messages(self, conversation: Conversation) -> List[Dict[str, Any]]:
@@ -85,6 +128,7 @@ class AgentEngine:
         # 如果是第一条消息，设置对话标题
         if len(conversation.messages) == 1:
             conversation.title = user_message[:50]
+        self._save_conversations()
 
         # 发送对话 ID
         yield {
@@ -125,6 +169,7 @@ class AgentEngine:
                         content=content
                     )
                     conversation.messages.append(assistant_msg)
+                    self._save_conversations()
 
                     yield {
                         "event": SSEEventType.CONTENT,
@@ -157,6 +202,7 @@ class AgentEngine:
                     tool_calls=tool_call_objects
                 )
                 conversation.messages.append(assistant_msg)
+                self._save_conversations()
 
                 # 如果有文本内容，先输出
                 if content:
@@ -209,6 +255,7 @@ class AgentEngine:
                         tool_calls=[ToolCall(id=tc.id, name=tc.name)]
                     )
                     conversation.messages.append(tool_msg)
+                    self._save_conversations()
 
         if not completed and iteration >= MAX_ITERATIONS:
             limit_notice = (
@@ -221,6 +268,7 @@ class AgentEngine:
                     content=limit_notice
                 )
             )
+            self._save_conversations()
             yield {
                 "event": SSEEventType.CONTENT,
                 "data": json.dumps({

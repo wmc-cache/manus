@@ -1,7 +1,8 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import type {
   Message,
   ToolCall,
+  Conversation,
   ContentEventData,
   ToolCallEventData,
   ToolResultEventData,
@@ -11,6 +12,7 @@ import type {
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
 
 interface AgentState {
+  conversations: Conversation[];
   messages: Message[];
   isLoading: boolean;
   isThinking: boolean;
@@ -22,8 +24,70 @@ interface AgentState {
   continueMessage: string | null;
 }
 
+interface ConversationListResponse {
+  conversations?: Array<{
+    id: string;
+    title: string;
+    message_count: number;
+    created_at: string;
+  }>;
+}
+
+interface ConversationDetailResponse {
+  id: string;
+  title: string;
+  messages?: Array<{
+    id: string;
+    role: "user" | "assistant" | "tool";
+    content: string;
+    timestamp: string;
+    tool_calls?: Array<{
+      id: string;
+      name: string;
+      arguments?: Record<string, unknown>;
+      result?: unknown;
+      status?: ToolCall["status"];
+    }>;
+  }>;
+  created_at: string;
+}
+
+type ConversationDetailMessage = NonNullable<ConversationDetailResponse["messages"]>[number];
+
+function normalizeConversations(payload: ConversationListResponse): Conversation[] {
+  const items = payload.conversations || [];
+  return items.map((item) => ({
+    id: item.id,
+    title: item.title || "新对话",
+    messages: [],
+    messageCount: item.message_count || 0,
+    createdAt: item.created_at || new Date().toISOString(),
+  }));
+}
+
+function normalizeMessage(item: ConversationDetailMessage): Message {
+  return {
+    id: item?.id || crypto.randomUUID(),
+    role: item?.role || "assistant",
+    content: item?.content || "",
+    toolCalls: (item?.tool_calls || []).map((tc) => ({
+      id: tc.id || crypto.randomUUID(),
+      name: tc.name || "",
+      arguments: tc.arguments || {},
+      result: typeof tc.result === "string"
+        ? tc.result
+        : tc.result === undefined || tc.result === null
+          ? undefined
+          : JSON.stringify(tc.result),
+      status: tc.status || "completed",
+    })),
+    timestamp: item?.timestamp || new Date().toISOString(),
+  };
+}
+
 export function useAgent() {
   const [state, setState] = useState<AgentState>({
+    conversations: [],
     messages: [],
     isLoading: false,
     isThinking: false,
@@ -36,6 +100,56 @@ export function useAgent() {
   });
 
   const abortControllerRef = useRef<AbortController | null>(null);
+
+  const fetchConversations = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/conversations`);
+      if (!res.ok) return;
+
+      const data = (await res.json()) as ConversationListResponse;
+      const conversations = normalizeConversations(data);
+
+      setState((prev) => ({
+        ...prev,
+        conversations,
+      }));
+    } catch {
+      // ignore list fetch errors
+    }
+  }, []);
+
+  const loadConversation = useCallback(async (conversationId: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/conversations/${conversationId}`);
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+      }
+
+      const data = (await res.json()) as ConversationDetailResponse;
+      const messages = (data.messages || []).map(normalizeMessage);
+
+      setState((prev) => ({
+        ...prev,
+        messages,
+        conversationId: data.id,
+        isLoading: false,
+        isThinking: false,
+        currentToolCall: null,
+        error: null,
+        iteration: 0,
+        limitReached: false,
+        continueMessage: null,
+      }));
+
+      return true;
+    } catch (err) {
+      setState((prev) => ({
+        ...prev,
+        error: err instanceof Error ? err.message : "加载历史对话失败",
+      }));
+      return false;
+    }
+  }, []);
 
   const sendMessage = useCallback(async (message: string) => {
     // 添加用户消息
@@ -234,6 +348,7 @@ export function useAgent() {
                         ? (doneData.continue_message || defaultContinueMessage)
                         : null,
                     }));
+                    void fetchConversations();
                   }
                   break;
 
@@ -263,7 +378,7 @@ export function useAgent() {
         error: err instanceof Error ? err.message : "连接失败",
       }));
     }
-  }, [state.conversationId]);
+  }, [state.conversationId, fetchConversations]);
 
   const stopAgent = useCallback(() => {
     abortControllerRef.current?.abort();
@@ -281,7 +396,8 @@ export function useAgent() {
   }, [sendMessage, state.isLoading, state.conversationId]);
 
   const clearMessages = useCallback(() => {
-    setState({
+    setState((prev) => ({
+      ...prev,
       messages: [],
       isLoading: false,
       isThinking: false,
@@ -291,13 +407,19 @@ export function useAgent() {
       iteration: 0,
       limitReached: false,
       continueMessage: null,
-    });
+    }));
   }, []);
+
+  useEffect(() => {
+    void fetchConversations();
+  }, [fetchConversations]);
 
   return {
     ...state,
     sendMessage,
     continueAgent,
+    fetchConversations,
+    loadConversation,
     stopAgent,
     clearMessages,
   };

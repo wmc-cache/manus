@@ -25,6 +25,7 @@ const HERO_BG =
 
 export default function Home() {
   const {
+    conversations,
     messages,
     isLoading,
     isThinking,
@@ -34,6 +35,7 @@ export default function Home() {
     continueMessage,
     conversationId,
     sendMessage,
+    loadConversation,
     continueAgent,
     stopAgent,
     clearMessages,
@@ -81,6 +83,18 @@ export default function Home() {
     [sendMessage]
   );
 
+  const handleSelectConversation = useCallback(
+    async (id: string) => {
+      if (!id || id === conversationId || isLoading) return;
+      const ok = await loadConversation(id);
+      if (ok) {
+        sandbox.switchConversation(id);
+        prevConvIdRef.current = id;
+      }
+    },
+    [conversationId, isLoading, loadConversation, sandbox.switchConversation]
+  );
+
   const hasMessages = messages.length > 0;
 
   return (
@@ -99,7 +113,14 @@ export default function Home() {
       <div className="relative flex w-full h-full">
         {/* 侧边栏 */}
         <AnimatePresence>
-          {sidebarOpen && <Sidebar onNewChat={handleNewChat} />}
+          {sidebarOpen && (
+            <Sidebar
+              onNewChat={handleNewChat}
+              conversations={conversations}
+              activeConversationId={conversationId}
+              onSelectConversation={handleSelectConversation}
+            />
+          )}
         </AnimatePresence>
 
         {/* 主内容区 - 对话 */}
