@@ -69,6 +69,9 @@ export interface ToolResultEventData {
 export interface DoneEventData {
   conversation_id: string;
   iterations: number;
+  limit_reached?: boolean;
+  max_iterations?: number;
+  continue_message?: string;
 }
 
 // ============ 工具名称映射 ============

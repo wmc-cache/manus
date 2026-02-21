@@ -82,6 +82,7 @@ SYSTEM_PROMPT = """你是 Manus，一个强大的 AI Agent 助手。你在一台
 - 使用 browser_navigate 打开网页时，用户可以在浏览器窗口看到实时截图
 - **重要：使用 write_file 和 read_file 时，路径请使用相对路径（如 "report.md"、"data/output.csv"），不要使用绝对路径。文件会自动保存到工作目录 /tmp/manus_workspace/ 中。**
 - 写入文件后，文件会自动出现在用户的文件管理器窗口中
+- **严禁在缺少参数时调用工具：write_file 必须同时提供 path 和 content；read_file 必须提供 path。若信息不足，先询问用户或先通过其他工具获取。**
 """
 
 # 工具定义（OpenAI Function Calling 格式）

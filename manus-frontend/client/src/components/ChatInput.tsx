@@ -10,15 +10,21 @@ import { Button } from "@/components/ui/button";
 interface ChatInputProps {
   onSend: (message: string) => void;
   onStop: () => void;
+  onContinue?: () => void;
   isLoading: boolean;
   disabled?: boolean;
+  showContinue?: boolean;
+  continueLabel?: string;
 }
 
 export default function ChatInput({
   onSend,
   onStop,
+  onContinue,
   isLoading,
   disabled,
+  showContinue,
+  continueLabel = "继续",
 }: ChatInputProps) {
   const [input, setInput] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -79,18 +85,32 @@ export default function ChatInput({
             <Square className="w-4 h-4" />
           </Button>
         ) : (
-          <Button
-            onClick={handleSubmit}
-            size="icon"
-            disabled={!input.trim() || disabled}
-            className="shrink-0 h-9 w-9 rounded-xl bg-primary/80 hover:bg-primary text-primary-foreground disabled:opacity-30"
-          >
-            {input.trim() ? (
-              <Send className="w-4 h-4" />
-            ) : (
-              <Sparkles className="w-4 h-4" />
+          <div className="shrink-0 flex items-center gap-2">
+            {showContinue && onContinue && (
+              <Button
+                onClick={onContinue}
+                size="sm"
+                variant="outline"
+                disabled={disabled}
+                className="h-9 rounded-xl border-primary/40 text-primary hover:bg-primary/10"
+              >
+                {continueLabel}
+              </Button>
             )}
-          </Button>
+
+            <Button
+              onClick={handleSubmit}
+              size="icon"
+              disabled={!input.trim() || disabled}
+              className="h-9 w-9 rounded-xl bg-primary/80 hover:bg-primary text-primary-foreground disabled:opacity-30"
+            >
+              {input.trim() ? (
+                <Send className="w-4 h-4" />
+              ) : (
+                <Sparkles className="w-4 h-4" />
+              )}
+            </Button>
+          </div>
         )}
       </motion.div>
 

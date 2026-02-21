@@ -96,6 +96,8 @@ class AgentEngine:
         }
 
         iteration = 0
+        completed = False
+        limit_notice = ""
         while iteration < MAX_ITERATIONS:
             iteration += 1
 
@@ -133,6 +135,7 @@ class AgentEngine:
                     }
 
                 # Agent 循环结束
+                completed = True
                 break
 
             else:
@@ -207,12 +210,34 @@ class AgentEngine:
                     )
                     conversation.messages.append(tool_msg)
 
+        if not completed and iteration >= MAX_ITERATIONS:
+            limit_notice = (
+                f"已达到单次最大调用轮数（{MAX_ITERATIONS} 轮）。"
+                "你可以点击“继续”让 Agent 在当前上下文中接着执行。"
+            )
+            conversation.messages.append(
+                Message(
+                    role=MessageRole.ASSISTANT,
+                    content=limit_notice
+                )
+            )
+            yield {
+                "event": SSEEventType.CONTENT,
+                "data": json.dumps({
+                    "content": limit_notice,
+                    "type": "final_answer"
+                }, ensure_ascii=False)
+            }
+
         # 发送完成事件
         yield {
             "event": SSEEventType.DONE,
             "data": json.dumps({
                 "conversation_id": conversation.id,
-                "iterations": iteration
+                "iterations": iteration,
+                "limit_reached": (not completed and iteration >= MAX_ITERATIONS),
+                "max_iterations": MAX_ITERATIONS,
+                "continue_message": limit_notice
             }, ensure_ascii=False)
         }
 

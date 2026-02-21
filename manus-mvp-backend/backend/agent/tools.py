@@ -303,8 +303,17 @@ async def write_file(path: str, content: str) -> str:
     """写入文件"""
     workspace = _get_workspace()
     try:
+        if not isinstance(path, str) or not path.strip():
+            return "写入文件出错: 参数 path 不能为空。请使用相对路径，例如 report.md。"
+
+        if not isinstance(content, str):
+            return "写入文件出错: 参数 content 必须是字符串。"
+
         if not os.path.isabs(path):
             path = os.path.join(workspace, path)
+
+        if os.path.isdir(path):
+            return f"写入文件出错: path 指向目录而不是文件: {path}"
 
         dir_path = os.path.dirname(path)
         if dir_path:
@@ -353,19 +362,35 @@ def _get_lang(path: str) -> str:
 TOOL_REGISTRY = {
     "web_search": {
         "func": web_search,
-        "extract_args": lambda args: {"query": args.get("query", "")},
+        "extract_args": lambda args: {"query": args.get("query")},
+        "required_keys": ["query"],
+        "non_empty_keys": ["query"],
+        "string_keys": ["query"],
+        "usage_hint": '示例: {"query": "最新 AI 行业动态"}',
     },
     "shell_exec": {
         "func": shell_exec,
-        "extract_args": lambda args: {"command": args.get("command", "")},
+        "extract_args": lambda args: {"command": args.get("command")},
+        "required_keys": ["command"],
+        "non_empty_keys": ["command"],
+        "string_keys": ["command"],
+        "usage_hint": '示例: {"command": "ls -la"}',
     },
     "execute_code": {
         "func": execute_code,
-        "extract_args": lambda args: {"code": args.get("code", "")},
+        "extract_args": lambda args: {"code": args.get("code")},
+        "required_keys": ["code"],
+        "non_empty_keys": ["code"],
+        "string_keys": ["code"],
+        "usage_hint": '示例: {"code": "print(123)"}',
     },
     "browser_navigate": {
         "func": browser_navigate,
-        "extract_args": lambda args: {"url": args.get("url", "")},
+        "extract_args": lambda args: {"url": args.get("url")},
+        "required_keys": ["url"],
+        "non_empty_keys": ["url"],
+        "string_keys": ["url"],
+        "usage_hint": '示例: {"url": "https://example.com"}',
     },
     "browser_screenshot": {
         "func": browser_screenshot,
@@ -377,14 +402,22 @@ TOOL_REGISTRY = {
     },
     "read_file": {
         "func": read_file,
-        "extract_args": lambda args: {"path": args.get("path", "")},
+        "extract_args": lambda args: {"path": args.get("path")},
+        "required_keys": ["path"],
+        "non_empty_keys": ["path"],
+        "string_keys": ["path"],
+        "usage_hint": '示例: {"path": "report.md"}',
     },
     "write_file": {
         "func": write_file,
         "extract_args": lambda args: {
-            "path": args.get("path", ""),
-            "content": args.get("content", "")
+            "path": args.get("path"),
+            "content": args.get("content")
         },
+        "required_keys": ["path", "content"],
+        "non_empty_keys": ["path"],
+        "string_keys": ["path", "content"],
+        "usage_hint": '示例: {"path": "report.md", "content": "# 报告"}',
     },
 }
 
@@ -394,12 +427,45 @@ async def execute_tool(name: str, arguments: Dict[str, Any], conversation_id: Op
     global _current_conversation_id
     _current_conversation_id = conversation_id
 
-    if name not in TOOL_REGISTRY:
-        return f"未知工具: {name}"
+    try:
+        if name not in TOOL_REGISTRY:
+            return f"未知工具: {name}"
 
-    tool = TOOL_REGISTRY[name]
-    kwargs = tool["extract_args"](arguments)
-    result = await tool["func"](**kwargs)
+        if not isinstance(arguments, dict):
+            raise ValueError(f"工具 `{name}` 参数格式错误: 需要 JSON 对象。")
 
-    _current_conversation_id = None
-    return result
+        tool = TOOL_REGISTRY[name]
+        kwargs = tool["extract_args"](arguments)
+
+        required_keys = tool.get("required_keys", [])
+        non_empty_keys = tool.get("non_empty_keys", [])
+        string_keys = tool.get("string_keys", [])
+        usage_hint = tool.get("usage_hint", "")
+
+        missing_keys = [k for k in required_keys if k not in kwargs or kwargs.get(k) is None]
+        if missing_keys:
+            hint = f" {usage_hint}" if usage_hint else ""
+            raise ValueError(f"工具 `{name}` 缺少必填参数: {', '.join(missing_keys)}。{hint}".strip())
+
+        empty_keys = []
+        for k in non_empty_keys:
+            v = kwargs.get(k)
+            if not isinstance(v, str) or not v.strip():
+                empty_keys.append(k)
+        if empty_keys:
+            hint = f" {usage_hint}" if usage_hint else ""
+            raise ValueError(f"工具 `{name}` 参数不能为空: {', '.join(empty_keys)}。{hint}".strip())
+
+        wrong_type_keys = []
+        for k in string_keys:
+            v = kwargs.get(k)
+            if v is not None and not isinstance(v, str):
+                wrong_type_keys.append(k)
+        if wrong_type_keys:
+            hint = f" {usage_hint}" if usage_hint else ""
+            raise ValueError(f"工具 `{name}` 参数类型错误(应为字符串): {', '.join(wrong_type_keys)}。{hint}".strip())
+
+        result = await tool["func"](**kwargs)
+        return result
+    finally:
+        _current_conversation_id = None

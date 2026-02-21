@@ -5,6 +5,7 @@ import type {
   ContentEventData,
   ToolCallEventData,
   ToolResultEventData,
+  DoneEventData,
 } from "@/types";
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
@@ -17,6 +18,8 @@ interface AgentState {
   conversationId: string | null;
   error: string | null;
   iteration: number;
+  limitReached: boolean;
+  continueMessage: string | null;
 }
 
 export function useAgent() {
@@ -28,6 +31,8 @@ export function useAgent() {
     conversationId: null,
     error: null,
     iteration: 0,
+    limitReached: false,
+    continueMessage: null,
   });
 
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -48,6 +53,8 @@ export function useAgent() {
       isThinking: true,
       error: null,
       iteration: 0,
+      limitReached: false,
+      continueMessage: null,
     }));
 
     // 准备 assistant 消息占位
@@ -211,12 +218,23 @@ export function useAgent() {
                 }
 
                 case "done":
-                  setState((prev) => ({
-                    ...prev,
-                    isLoading: false,
-                    isThinking: false,
-                    currentToolCall: null,
-                  }));
+                  {
+                    const doneData = data as DoneEventData;
+                    const limitReached = Boolean(doneData.limit_reached);
+                    const defaultContinueMessage = doneData.max_iterations
+                      ? `已达到单次最大调用轮数（${doneData.max_iterations} 轮）。点击“继续”可接着执行。`
+                      : "已达到单次最大调用轮数。点击“继续”可接着执行。";
+                    setState((prev) => ({
+                      ...prev,
+                      isLoading: false,
+                      isThinking: false,
+                      currentToolCall: null,
+                      limitReached,
+                      continueMessage: limitReached
+                        ? (doneData.continue_message || defaultContinueMessage)
+                        : null,
+                    }));
+                  }
                   break;
 
                 case "error":
@@ -257,6 +275,11 @@ export function useAgent() {
     }));
   }, []);
 
+  const continueAgent = useCallback(() => {
+    if (state.isLoading || !state.conversationId) return;
+    void sendMessage("继续");
+  }, [sendMessage, state.isLoading, state.conversationId]);
+
   const clearMessages = useCallback(() => {
     setState({
       messages: [],
@@ -266,12 +289,15 @@ export function useAgent() {
       conversationId: null,
       error: null,
       iteration: 0,
+      limitReached: false,
+      continueMessage: null,
     });
   }, []);
 
   return {
     ...state,
     sendMessage,
+    continueAgent,
     stopAgent,
     clearMessages,
   };

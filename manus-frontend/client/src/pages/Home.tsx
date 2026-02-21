@@ -30,8 +30,11 @@ export default function Home() {
     isThinking,
     error,
     iteration,
+    limitReached,
+    continueMessage,
     conversationId,
     sendMessage,
+    continueAgent,
     stopAgent,
     clearMessages,
   } = useAgent();
@@ -175,6 +178,12 @@ export default function Home() {
                   </div>
                 )}
 
+                {limitReached && continueMessage && (
+                  <div className="mx-4 my-2 p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-sm text-amber-300">
+                    {continueMessage}
+                  </div>
+                )}
+
                 <div ref={messagesEndRef} />
               </div>
             )}
@@ -183,8 +192,11 @@ export default function Home() {
           {/* 输入区域 */}
           <ChatInput
             onSend={sendMessage}
+            onContinue={continueAgent}
             onStop={stopAgent}
             isLoading={isLoading}
+            showContinue={limitReached}
+            continueLabel="继续"
           />
         </main>
 
