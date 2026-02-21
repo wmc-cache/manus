@@ -2,7 +2,7 @@
 import os
 import json
 from pathlib import Path
-from typing import AsyncGenerator, List, Dict, Any, Optional
+from typing import AsyncGenerator, List, Dict, Any, Optional, Tuple
 from openai import AsyncOpenAI
 
 
@@ -49,6 +49,23 @@ DEEPSEEK_API_KEY = _resolve_deepseek_api_key()
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_MODEL = "deepseek-chat"
 
+
+def _read_int_env(name: str, default: int, minimum: int = 1) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+        return value if value >= minimum else default
+    except ValueError:
+        return default
+
+
+# 大文件写入时，工具参数 JSON 体积会变大；默认提升输出 token 上限并支持环境变量覆盖。
+DEEPSEEK_MAX_TOKENS = _read_int_env("DEEPSEEK_MAX_TOKENS", 8192, minimum=256)
+# 部分模型可能限制更严格，若报 max_tokens 范围错误则自动回退到该值重试一次。
+DEEPSEEK_MAX_TOKENS_FALLBACK = _read_int_env("DEEPSEEK_MAX_TOKENS_FALLBACK", 4096, minimum=256)
+
 client = AsyncOpenAI(
     api_key=DEEPSEEK_API_KEY,
     base_url=DEEPSEEK_BASE_URL,
@@ -83,6 +100,7 @@ SYSTEM_PROMPT = """你是 Manus，一个强大的 AI Agent 助手。你在一台
 - **重要：使用 write_file 和 read_file 时，路径请使用相对路径（如 "report.md"、"data/output.csv"），不要使用绝对路径。文件会自动保存到工作目录 /tmp/manus_workspace/ 中。**
 - 写入文件后，文件会自动出现在用户的文件管理器窗口中
 - **严禁在缺少参数时调用工具：write_file 必须同时提供 path 和 content；read_file 必须提供 path。若信息不足，先询问用户或先通过其他工具获取。**
+- **写入长代码文件时每轮只调用 1 次 write_file；若内容过长，先写可运行最小版本再增量完善，避免参数 JSON 被截断。**
 """
 
 # 工具定义（OpenAI Function Calling 格式）
@@ -208,6 +226,75 @@ TOOLS = [
 ]
 
 
+def _parse_tool_arguments(raw_arguments: Any) -> Tuple[Dict[str, Any], Optional[str], str]:
+    """解析工具参数，避免把解析失败静默吞成 {}。"""
+    if isinstance(raw_arguments, dict):
+        return raw_arguments, None, ""
+
+    if raw_arguments is None:
+        return {}, "参数为空，无法解析 JSON。", ""
+
+    if not isinstance(raw_arguments, str):
+        preview = str(raw_arguments)[:300]
+        return {}, f"参数类型异常: {type(raw_arguments).__name__}。", preview
+
+    text = raw_arguments.strip()
+    if not text:
+        return {}, "参数为空字符串，无法解析 JSON。", ""
+
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as e:
+        preview = text[:300]
+        return {}, f"参数 JSON 解析失败（位置 {e.pos}）: {e.msg}", preview
+
+    if not isinstance(parsed, dict):
+        return {}, f"参数 JSON 顶层必须是对象，当前为 {type(parsed).__name__}。", text[:300]
+
+    return parsed, None, ""
+
+
+def _normalize_tool_calls(raw_tool_calls: Any) -> List[Dict[str, Any]]:
+    tool_calls: List[Dict[str, Any]] = []
+    if not raw_tool_calls:
+        return tool_calls
+
+    for tc in raw_tool_calls:
+        function = getattr(tc, "function", None)
+        raw_arguments = getattr(function, "arguments", None)
+        parsed_args, parse_error, preview = _parse_tool_arguments(raw_arguments)
+
+        item: Dict[str, Any] = {
+            "id": getattr(tc, "id", "") or "",
+            "name": getattr(function, "name", "") or "",
+            "arguments": parsed_args,
+        }
+        if parse_error:
+            item["parse_error"] = parse_error
+            if preview:
+                item["raw_arguments_preview"] = preview
+
+        tool_calls.append(item)
+
+    return tool_calls
+
+
+async def _create_completion(kwargs: Dict[str, Any]):
+    """创建补全请求，必要时对 max_tokens 做一次回退重试。"""
+    try:
+        return await client.chat.completions.create(**kwargs)
+    except Exception as e:
+        err_text = str(e).lower()
+        if (
+            kwargs.get("max_tokens") != DEEPSEEK_MAX_TOKENS_FALLBACK
+            and "max_tokens" in err_text
+        ):
+            retry_kwargs = dict(kwargs)
+            retry_kwargs["max_tokens"] = DEEPSEEK_MAX_TOKENS_FALLBACK
+            return await client.chat.completions.create(**retry_kwargs)
+        raise
+
+
 async def chat_completion_stream(
     messages: List[Dict[str, Any]],
     use_tools: bool = True,
@@ -226,13 +313,13 @@ async def chat_completion_stream(
             "messages": [{"role": "system", "content": SYSTEM_PROMPT}] + messages,
             "stream": True,
             "temperature": 0.7,
-            "max_tokens": 4096,
+            "max_tokens": DEEPSEEK_MAX_TOKENS,
         }
         if use_tools:
             kwargs["tools"] = TOOLS
             kwargs["tool_choice"] = "auto"
 
-        response = await client.chat.completions.create(**kwargs)
+        response = await _create_completion(kwargs)
 
         current_content = ""
         current_tool_calls = {}
@@ -263,13 +350,32 @@ async def chat_completion_stream(
 
             if finish_reason == "tool_calls":
                 for idx, tc in current_tool_calls.items():
-                    try:
-                        args = json.loads(tc["arguments"])
-                    except json.JSONDecodeError:
-                        args = {}
-                    yield {"type": "tool_call", "data": {"id": tc["id"], "name": tc["name"], "arguments": args}}
+                    args, parse_error, preview = _parse_tool_arguments(tc["arguments"])
+                    payload = {
+                        "id": tc["id"],
+                        "name": tc["name"],
+                        "arguments": args,
+                    }
+                    if parse_error:
+                        payload["parse_error"] = parse_error
+                        if preview:
+                            payload["raw_arguments_preview"] = preview
+                    yield {"type": "tool_call", "data": payload}
             elif finish_reason == "stop":
-                yield {"type": "done", "data": {"content": current_content, "tool_calls": list(current_tool_calls.values())}}
+                tool_calls_payload: List[Dict[str, Any]] = []
+                for tc in current_tool_calls.values():
+                    args, parse_error, preview = _parse_tool_arguments(tc["arguments"])
+                    item: Dict[str, Any] = {
+                        "id": tc["id"],
+                        "name": tc["name"],
+                        "arguments": args,
+                    }
+                    if parse_error:
+                        item["parse_error"] = parse_error
+                        if preview:
+                            item["raw_arguments_preview"] = preview
+                    tool_calls_payload.append(item)
+                yield {"type": "done", "data": {"content": current_content, "tool_calls": tool_calls_payload}}
 
     except Exception as e:
         yield {"type": "error", "data": str(e)}
@@ -291,24 +397,21 @@ async def chat_completion(
             "model": DEEPSEEK_MODEL,
             "messages": [{"role": "system", "content": SYSTEM_PROMPT}] + messages,
             "temperature": 0.7,
-            "max_tokens": 4096,
+            "max_tokens": DEEPSEEK_MAX_TOKENS,
         }
         if use_tools:
             kwargs["tools"] = TOOLS
             kwargs["tool_choice"] = "auto"
 
-        response = await client.chat.completions.create(**kwargs)
+        response = await _create_completion(kwargs)
         choice = response.choices[0]
 
-        result = {"content": choice.message.content or "", "tool_calls": []}
-
-        if choice.message.tool_calls:
-            for tc in choice.message.tool_calls:
-                try:
-                    args = json.loads(tc.function.arguments)
-                except json.JSONDecodeError:
-                    args = {}
-                result["tool_calls"].append({"id": tc.id, "name": tc.function.name, "arguments": args})
+        result = {
+            "content": choice.message.content or "",
+            "tool_calls": _normalize_tool_calls(choice.message.tool_calls),
+        }
+        if choice.finish_reason:
+            result["finish_reason"] = choice.finish_reason
 
         return result
 

@@ -145,6 +145,7 @@ class AgentEngine:
         stop_due_invalid_args = False
         invalid_args_fail_count = 0
         last_invalid_tool_name = ""
+        last_invalid_reason = ""
         while iteration < MAX_ITERATIONS:
             iteration += 1
 
@@ -189,14 +190,28 @@ class AgentEngine:
             else:
                 # 有工具调用
                 tool_call_objects = []
+                tool_call_parse_errors: Dict[str, str] = {}
+                tool_call_parse_previews: Dict[str, str] = {}
                 for tc_data in tool_calls_data:
+                    args = tc_data.get("arguments", {})
+                    if not isinstance(args, dict):
+                        args = {}
+                        tc_data["parse_error"] = "参数不是 JSON 对象。"
+
                     tc = ToolCall(
                         id=tc_data["id"],
                         name=tc_data["name"],
-                        arguments=tc_data.get("arguments", {}),
+                        arguments=args,
                         status=ToolCallStatus.RUNNING
                     )
                     tool_call_objects.append(tc)
+
+                    parse_error = tc_data.get("parse_error")
+                    if parse_error:
+                        tool_call_parse_errors[tc.id] = str(parse_error)
+                        preview = tc_data.get("raw_arguments_preview")
+                        if preview:
+                            tool_call_parse_previews[tc.id] = str(preview)
 
                 # 记录 assistant 消息（包含工具调用）
                 assistant_msg = Message(
@@ -230,25 +245,42 @@ class AgentEngine:
                         }, ensure_ascii=False)
                     }
 
-                    # 执行工具（传递 conversation_id 实现会话隔离）
-                    try:
-                        result = await execute_tool(tc.name, tc.arguments, conversation_id=conversation.id)
-                        tc.result = result
-                        tc.status = ToolCallStatus.COMPLETED
-                    except Exception as e:
-                        err_text = str(e)
-                        result = f"工具执行失败: {err_text}"
+                    parse_error = tool_call_parse_errors.get(tc.id)
+                    if parse_error:
+                        preview = tool_call_parse_previews.get(tc.id, "")
+                        result = (
+                            f"工具执行失败: 模型生成的 `{tc.name}` 参数不是合法 JSON。"
+                            f"原因: {parse_error}"
+                            "。这通常是因为内容过长导致参数被截断。"
+                        )
+                        if preview:
+                            result += f"\n参数片段: {preview}"
                         tc.result = result
                         tc.status = ToolCallStatus.FAILED
+                        invalid_args_fail_count += 1
+                        last_invalid_tool_name = tc.name
+                        last_invalid_reason = "parse_error"
+                    else:
+                    # 执行工具（传递 conversation_id 实现会话隔离）
+                        try:
+                            result = await execute_tool(tc.name, tc.arguments, conversation_id=conversation.id)
+                            tc.result = result
+                            tc.status = ToolCallStatus.COMPLETED
+                        except Exception as e:
+                            err_text = str(e)
+                            result = f"工具执行失败: {err_text}"
+                            tc.result = result
+                            tc.status = ToolCallStatus.FAILED
 
-                        if (
-                            "缺少必填参数" in err_text
-                            or "参数不能为空" in err_text
-                            or "参数类型错误" in err_text
-                            or "参数格式错误" in err_text
-                        ):
-                            invalid_args_fail_count += 1
-                            last_invalid_tool_name = tc.name
+                            if (
+                                "缺少必填参数" in err_text
+                                or "参数不能为空" in err_text
+                                or "参数类型错误" in err_text
+                                or "参数格式错误" in err_text
+                            ):
+                                invalid_args_fail_count += 1
+                                last_invalid_tool_name = tc.name
+                                last_invalid_reason = "invalid_args"
 
                     # 通知前端工具调用结果
                     yield {
@@ -282,11 +314,18 @@ class AgentEngine:
                         break
 
                 if stop_due_invalid_args:
-                    invalid_notice = (
-                        f"工具 `{last_invalid_tool_name}` 连续多次缺少必要参数，"
-                        "我无法继续自动执行。请明确告诉我参数后我再继续。"
-                        "\n例如：`将 XXX 写入 plane_game/game.js`。"
-                    )
+                    if last_invalid_reason == "parse_error":
+                        invalid_notice = (
+                            f"工具 `{last_invalid_tool_name}` 连续多次生成了无效参数（疑似输出过长被截断），"
+                            "我先停止自动重试，避免死循环。"
+                            "\n你可以点击“继续”，我会改为更短、更分步地写入文件。"
+                        )
+                    else:
+                        invalid_notice = (
+                            f"工具 `{last_invalid_tool_name}` 连续多次缺少必要参数，"
+                            "我无法继续自动执行。请明确告诉我参数后我再继续。"
+                            "\n例如：`将 XXX 写入 plane_game/game.js`。"
+                        )
                     conversation.messages.append(
                         Message(
                             role=MessageRole.ASSISTANT,
