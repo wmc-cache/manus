@@ -126,7 +126,9 @@ export function useAgent() {
       }
 
       const data = (await res.json()) as ConversationDetailResponse;
-      const messages = (data.messages || []).map(normalizeMessage);
+      const messages = (data.messages || [])
+        .filter((msg) => msg.role !== "tool")
+        .map(normalizeMessage);
 
       setState((prev) => ({
         ...prev,

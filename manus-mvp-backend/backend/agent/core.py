@@ -142,6 +142,9 @@ class AgentEngine:
         iteration = 0
         completed = False
         limit_notice = ""
+        stop_due_invalid_args = False
+        invalid_args_fail_count = 0
+        last_invalid_tool_name = ""
         while iteration < MAX_ITERATIONS:
             iteration += 1
 
@@ -233,9 +236,19 @@ class AgentEngine:
                         tc.result = result
                         tc.status = ToolCallStatus.COMPLETED
                     except Exception as e:
-                        result = f"工具执行失败: {str(e)}"
+                        err_text = str(e)
+                        result = f"工具执行失败: {err_text}"
                         tc.result = result
                         tc.status = ToolCallStatus.FAILED
+
+                        if (
+                            "缺少必填参数" in err_text
+                            or "参数不能为空" in err_text
+                            or "参数类型错误" in err_text
+                            or "参数格式错误" in err_text
+                        ):
+                            invalid_args_fail_count += 1
+                            last_invalid_tool_name = tc.name
 
                     # 通知前端工具调用结果
                     yield {
@@ -252,10 +265,44 @@ class AgentEngine:
                     tool_msg = Message(
                         role=MessageRole.TOOL,
                         content=result,
-                        tool_calls=[ToolCall(id=tc.id, name=tc.name)]
+                        tool_calls=[ToolCall(
+                            id=tc.id,
+                            name=tc.name,
+                            arguments=tc.arguments,
+                            result=result,
+                            status=tc.status
+                        )]
                     )
                     conversation.messages.append(tool_msg)
                     self._save_conversations()
+
+                    # 连续参数错误时停止自动重试，避免空参数死循环
+                    if invalid_args_fail_count >= 2:
+                        stop_due_invalid_args = True
+                        break
+
+                if stop_due_invalid_args:
+                    invalid_notice = (
+                        f"工具 `{last_invalid_tool_name}` 连续多次缺少必要参数，"
+                        "我无法继续自动执行。请明确告诉我参数后我再继续。"
+                        "\n例如：`将 XXX 写入 plane_game/game.js`。"
+                    )
+                    conversation.messages.append(
+                        Message(
+                            role=MessageRole.ASSISTANT,
+                            content=invalid_notice
+                        )
+                    )
+                    self._save_conversations()
+                    yield {
+                        "event": SSEEventType.CONTENT,
+                        "data": json.dumps({
+                            "content": invalid_notice,
+                            "type": "final_answer"
+                        }, ensure_ascii=False)
+                    }
+                    completed = True
+                    break
 
         if not completed and iteration >= MAX_ITERATIONS:
             limit_notice = (
