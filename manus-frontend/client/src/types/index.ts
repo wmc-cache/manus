@@ -78,6 +78,7 @@ export interface DoneEventData {
 
 export const TOOL_NAMES: Record<string, string> = {
   web_search: "网页搜索",
+  wide_research: "并行研究",
   shell_exec: "终端命令",
   execute_code: "代码执行",
   browser_navigate: "浏览网页",
@@ -89,6 +90,7 @@ export const TOOL_NAMES: Record<string, string> = {
 
 export const TOOL_ICONS: Record<string, string> = {
   web_search: "Globe",
+  wide_research: "ListTodo",
   shell_exec: "Terminal",
   execute_code: "Code",
   browser_navigate: "Globe",

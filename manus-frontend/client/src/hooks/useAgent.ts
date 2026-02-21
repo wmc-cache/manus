@@ -10,6 +10,12 @@ import type {
 } from "@/types";
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
+const API_TOKEN = (import.meta.env.VITE_MANUS_API_TOKEN || "").trim();
+
+function buildAuthHeaders(base: Record<string, string> = {}): Record<string, string> {
+  if (!API_TOKEN) return base;
+  return { ...base, Authorization: `Bearer ${API_TOKEN}` };
+}
 
 interface AgentState {
   conversations: Conversation[];
@@ -103,7 +109,9 @@ export function useAgent() {
 
   const fetchConversations = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/conversations`);
+      const res = await fetch(`${API_BASE}/api/conversations`, {
+        headers: buildAuthHeaders(),
+      });
       if (!res.ok) return;
 
       const data = (await res.json()) as ConversationListResponse;
@@ -120,7 +128,9 @@ export function useAgent() {
 
   const loadConversation = useCallback(async (conversationId: string) => {
     try {
-      const res = await fetch(`${API_BASE}/api/conversations/${conversationId}`);
+      const res = await fetch(`${API_BASE}/api/conversations/${conversationId}`, {
+        headers: buildAuthHeaders(),
+      });
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}: ${res.statusText}`);
       }
@@ -183,7 +193,7 @@ export function useAgent() {
 
       const response = await fetch(`${API_BASE}/api/chat`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: buildAuthHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
           message,
           conversation_id: state.conversationId,

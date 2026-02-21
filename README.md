@@ -38,6 +38,8 @@
 | 工具 | 功能 | 说明 |
 |------|------|------|
 | `web_search` | 网页搜索 | 通过 DuckDuckGo 搜索互联网 |
+| `wide_research` | 并行研究 | 对一组对象并发搜索并落盘 `research/summary.md` |
+| `shell_exec` | 终端命令 | 在工作目录执行 shell 命令 |
 | `execute_code` | 代码执行 | 在沙箱中执行 Python 代码 |
 | `read_file` | 读取文件 | 读取指定路径的文件内容 |
 | `write_file` | 写入文件 | 创建或写入文件 |
@@ -129,6 +131,12 @@ manus-mvp/
 | 变量 | 说明 | 必填 |
 |------|------|------|
 | `DEEPSEEK_API_KEY` | DeepSeek API 密钥 | 是 |
+| `MANUS_ALLOWED_ORIGINS` | 后端允许的前端来源（逗号分隔，默认仅本机 3000） | 否 |
+| `MANUS_API_TOKEN` | 后端 API 鉴权令牌（启用后 HTTP/WS 需携带） | 否 |
+| `VITE_MANUS_API_TOKEN` | 前端请求时附带的鉴权令牌（应与 `MANUS_API_TOKEN` 一致） | 否 |
+| `MANUS_SANDBOX_INHERIT_ENV` | 是否让工具子进程继承全部环境变量（默认否，仅保留安全变量） | 否 |
+| `MANUS_WIDE_RESEARCH_MAX_ITEMS` | `wide_research` 单次最大条目数（默认 20） | 否 |
+| `MANUS_WIDE_RESEARCH_CONCURRENCY` | `wide_research` 并发度（默认 5） | 否 |
 
 ## License
 

@@ -1,20 +1,52 @@
 """文件系统服务 - 文件树和内容管理（支持会话隔离）"""
 import os
 import mimetypes
+import re
+from pathlib import Path
 from typing import Dict, Any, List, Optional
 from sandbox.event_bus import event_bus, SandboxEvent
 
 WORKSPACE_BASE = "/tmp/manus_workspace"
+CONVERSATION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+
+
+def _normalize_conversation_id(conversation_id: Optional[str]) -> Optional[str]:
+    if not conversation_id:
+        return None
+    cid = str(conversation_id).strip()
+    if not CONVERSATION_ID_PATTERN.fullmatch(cid):
+        return None
+    return cid
 
 
 def get_workspace_root(conversation_id: Optional[str] = None) -> str:
     """获取指定会话的 workspace 根目录"""
-    if conversation_id:
-        path = os.path.join(WORKSPACE_BASE, conversation_id)
+    cid = _normalize_conversation_id(conversation_id)
+    if cid:
+        path = os.path.join(WORKSPACE_BASE, cid)
     else:
         path = os.path.join(WORKSPACE_BASE, "_default")
     os.makedirs(path, exist_ok=True)
     return path
+
+
+def _resolve_path_in_workspace(path: str, root: str) -> tuple[str, str]:
+    """将 path 解析到 root 下，阻止绝对路径、目录穿越与符号链接越界。"""
+    if not isinstance(path, str) or not path.strip():
+        raise ValueError("路径不能为空")
+
+    raw = path.strip()
+    candidate = Path(raw)
+    if candidate.is_absolute():
+        raise ValueError("仅支持相对路径，禁止绝对路径访问")
+
+    root_path = Path(root).resolve()
+    resolved = (root_path / candidate).resolve()
+    if resolved != root_path and root_path not in resolved.parents:
+        raise ValueError("路径越界：禁止访问工作目录外的文件")
+
+    rel_path = os.path.relpath(str(resolved), str(root_path))
+    return str(resolved), rel_path
 
 
 def _is_text_file(path: str) -> bool:
@@ -69,6 +101,7 @@ def _get_language(name: str) -> str:
 async def get_file_tree(conversation_id: Optional[str] = None, max_depth: int = 4) -> List[Dict[str, Any]]:
     """获取文件树结构（按会话隔离）"""
     root = get_workspace_root(conversation_id)
+    root_path = Path(root).resolve()
 
     def _scan(path: str, depth: int) -> List[Dict[str, Any]]:
         if depth > max_depth:
@@ -85,6 +118,12 @@ async def get_file_tree(conversation_id: Optional[str] = None, max_depth: int = 
             if name.startswith("."):
                 continue
             full = os.path.join(path, name)
+            try:
+                resolved = Path(full).resolve()
+            except OSError:
+                continue
+            if resolved != root_path and root_path not in resolved.parents:
+                continue
             if os.path.isdir(full):
                 dirs.append(name)
             else:
@@ -124,14 +163,17 @@ async def get_file_tree(conversation_id: Optional[str] = None, max_depth: int = 
 async def read_file_content(path: str, conversation_id: Optional[str] = None) -> Dict[str, Any]:
     """读取文件内容（按会话隔离）"""
     root = get_workspace_root(conversation_id)
-    full_path = path if os.path.isabs(path) else os.path.join(root, path)
+    try:
+        full_path, rel_path = _resolve_path_in_workspace(path, root)
+    except ValueError as e:
+        return {"error": str(e)}
 
     if not os.path.exists(full_path):
         return {"error": f"文件不存在: {path}"}
 
     if not _is_text_file(full_path):
         return {
-            "path": path,
+            "path": rel_path,
             "is_text": False,
             "size": os.path.getsize(full_path),
             "message": "二进制文件，无法预览",
@@ -148,13 +190,13 @@ async def read_file_content(path: str, conversation_id: Optional[str] = None) ->
 
         await event_bus.publish(SandboxEvent(
             "file_opened",
-            {"path": path, "name": name, "language": _get_language(name), "content": content},
+            {"path": rel_path, "name": name, "language": _get_language(name), "content": content},
             window_id="editor",
             conversation_id=conversation_id,
         ))
 
         return {
-            "path": path,
+            "path": rel_path,
             "name": name,
             "content": content,
             "language": _get_language(name),

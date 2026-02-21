@@ -7,8 +7,9 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Query
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
 from models.schemas import ChatRequest
 from agent.core import agent_engine
@@ -22,14 +23,61 @@ app = FastAPI(
     version="0.3.0"
 )
 
+API_TOKEN = os.environ.get("MANUS_API_TOKEN", "").strip()
+
+# CORS 配置（默认仅允许本地前端）
+_origins_raw = os.environ.get(
+    "MANUS_ALLOWED_ORIGINS",
+    "http://localhost:3000,http://127.0.0.1:3000",
+)
+_allow_origins = [item.strip() for item in _origins_raw.split(",") if item.strip()]
+if not _allow_origins:
+    _allow_origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
+_allow_credentials = "*" not in _allow_origins
+
 # CORS 配置
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_allow_origins,
+    allow_credentials=_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _extract_bearer_token(header_value: str) -> str:
+    if not isinstance(header_value, str):
+        return ""
+    text = header_value.strip()
+    if not text.lower().startswith("bearer "):
+        return ""
+    return text[7:].strip()
+
+
+def _is_authorized_http(request: Request) -> bool:
+    if not API_TOKEN:
+        return True
+    auth_token = _extract_bearer_token(request.headers.get("authorization", ""))
+    return bool(auth_token) and auth_token == API_TOKEN
+
+
+def _is_authorized_ws(websocket: WebSocket) -> bool:
+    if not API_TOKEN:
+        return True
+
+    header_token = _extract_bearer_token(websocket.headers.get("authorization", ""))
+    query_token = websocket.query_params.get("token", "").strip()
+    token = header_token or query_token
+    return bool(token) and token == API_TOKEN
+
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    # 仅拦截业务 API，保留健康检查可匿名探活
+    if request.url.path.startswith("/api/") and request.url.path != "/api/health":
+        if not _is_authorized_http(request):
+            return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+    return await call_next(request)
 
 
 @app.get("/api/health")
@@ -43,15 +91,30 @@ async def chat(request: ChatRequest):
     if not request.message.strip():
         raise HTTPException(status_code=400, detail="消息不能为空")
 
+    # 先解析会话并加锁，避免同一 conversation 并发请求造成消息/计划状态错乱
+    conversation = agent_engine.get_or_create_conversation(request.conversation_id)
+    conversation_lock = agent_engine.get_conversation_lock(conversation.id)
+
     async def event_generator():
-        async for event in agent_engine.run_agent_loop(
-            user_message=request.message,
-            conversation_id=request.conversation_id
-        ):
+        if conversation_lock.locked():
             yield {
-                "event": event["event"].value if hasattr(event["event"], 'value') else event["event"],
-                "data": event["data"]
+                "event": "thinking",
+                "data": json.dumps({
+                    "iteration": 0,
+                    "status": "queued",
+                    "message": "当前会话有任务正在执行，已进入队列等待。",
+                }, ensure_ascii=False),
             }
+
+        async with conversation_lock:
+            async for event in agent_engine.run_agent_loop(
+                user_message=request.message,
+                conversation_id=conversation.id
+            ):
+                yield {
+                    "event": event["event"].value if hasattr(event["event"], 'value') else event["event"],
+                    "data": event["data"]
+                }
 
     return EventSourceResponse(event_generator())
 
@@ -61,6 +124,12 @@ async def list_conversations():
     """获取对话列表"""
     convs = []
     for conv in agent_engine.conversations.values():
+        running_phase = None
+        if conv.plan and conv.plan.phases:
+            running_phase = next(
+                (phase.id for phase in conv.plan.phases if phase.status.value == "running"),
+                conv.plan.current_phase_id,
+            )
         convs.append({
             "id": conv.id,
             "title": conv.title,
@@ -68,6 +137,8 @@ async def list_conversations():
             "created_at": conv.created_at.isoformat(),
             "manual_takeover_enabled": conv.manual_takeover_enabled,
             "manual_takeover_target": conv.manual_takeover_target,
+            "plan_goal": conv.plan.goal if conv.plan else None,
+            "plan_current_phase_id": running_phase,
         })
     convs.sort(key=lambda x: x["created_at"], reverse=True)
     return {"conversations": convs}
@@ -104,6 +175,7 @@ async def get_conversation(conversation_id: str):
         "id": conv.id,
         "title": conv.title,
         "messages": messages,
+        "plan": conv.plan.model_dump(mode="json") if conv.plan else None,
         "created_at": conv.created_at.isoformat(),
         "manual_takeover_enabled": conv.manual_takeover_enabled,
         "manual_takeover_target": conv.manual_takeover_target,
@@ -115,6 +187,10 @@ async def get_conversation(conversation_id: str):
 @app.websocket("/ws/sandbox")
 async def websocket_sandbox(websocket: WebSocket):
     """WebSocket 端点 - 实时推送沙箱事件到前端计算机窗口（支持按 conversation_id 过滤）"""
+    if not _is_authorized_ws(websocket):
+        await websocket.close(code=1008, reason="Unauthorized")
+        return
+
     await websocket.accept()
 
     # 订阅事件总线
@@ -142,8 +218,13 @@ async def websocket_sandbox(websocket: WebSocket):
                     event_dict = event.to_dict()
                     # 如果前端订阅了特定 conversation_id，只推送该会话的事件
                     event_conv_id = event_dict.get("conversation_id")
-                    if subscribed_conv_id is None or event_conv_id is None or event_conv_id == subscribed_conv_id:
-                        await websocket.send_json(event_dict)
+                    if subscribed_conv_id is None:
+                        # 未订阅具体会话时，仅推送全局事件，避免跨会话干扰
+                        if event_conv_id is None:
+                            await websocket.send_json(event_dict)
+                    else:
+                        if event_conv_id is None or event_conv_id == subscribed_conv_id:
+                            await websocket.send_json(event_dict)
                 except Exception:
                     break
 
@@ -426,10 +507,7 @@ async def get_sandbox_status():
             sid: {"is_alive": s.is_alive}
             for sid, s in terminal_manager.sessions.items()
         },
-        "browser": {
-            "is_ready": browser_service._is_ready,
-            "current_url": browser_service._current_url,
-        },
+        "browser": browser_service.get_status(),
         "workspace_base": "/tmp/manus_workspace",
     }
 

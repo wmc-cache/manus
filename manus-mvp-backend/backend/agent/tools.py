@@ -1,32 +1,33 @@
 """Agent 工具系统 - 定义和执行各种工具，联动计算机窗口（支持会话隔离）"""
 import os
 import sys
-import json
 import re
 import asyncio
-import tempfile
 import traceback
-from typing import Any, Dict, Optional
+from contextvars import ContextVar
+from pathlib import Path
+from typing import Any, Dict, Optional, List
+from urllib.parse import unquote, urlparse, parse_qs
 
 from sandbox.event_bus import event_bus, SandboxEvent
 from sandbox.browser import browser_service
-from sandbox.filesystem import notify_file_change
+from sandbox.filesystem import notify_file_change, get_workspace_root
 
-WORKSPACE_BASE = "/tmp/manus_workspace"
+# 当前执行上下文中的 conversation_id（由 execute_tool 设置，支持并发隔离）
+_current_conversation_id: ContextVar[Optional[str]] = ContextVar(
+    "current_conversation_id",
+    default=None,
+)
 
-# 当前执行上下文中的 conversation_id（由 execute_tool 设置）
-_current_conversation_id: Optional[str] = None
+
+def _get_current_conversation_id() -> Optional[str]:
+    return _current_conversation_id.get()
 
 
 def _get_workspace(conversation_id: Optional[str] = None) -> str:
     """获取当前会话的 workspace 目录"""
-    cid = conversation_id or _current_conversation_id
-    if cid:
-        path = os.path.join(WORKSPACE_BASE, cid)
-    else:
-        path = os.path.join(WORKSPACE_BASE, "_default")
-    os.makedirs(path, exist_ok=True)
-    return path
+    cid = conversation_id or _get_current_conversation_id()
+    return get_workspace_root(cid)
 
 
 def _publish_event(event_type: str, data: dict, window_id: Optional[str] = None):
@@ -34,12 +35,140 @@ def _publish_event(event_type: str, data: dict, window_id: Optional[str] = None)
     return SandboxEvent(
         event_type, data,
         window_id=window_id,
-        conversation_id=_current_conversation_id,
+        conversation_id=_get_current_conversation_id(),
     )
+
+
+def _resolve_workspace_path(path: str, workspace: str) -> str:
+    """将相对路径安全解析到工作目录下，阻止绝对路径与目录穿越。"""
+    if not isinstance(path, str) or not path.strip():
+        raise ValueError("path 不能为空")
+
+    raw = path.strip()
+    candidate = Path(raw)
+    if candidate.is_absolute():
+        raise ValueError("path 必须是相对路径，禁止使用绝对路径。")
+
+    workspace_path = Path(workspace).resolve()
+    resolved = (workspace_path / candidate).resolve()
+    if resolved != workspace_path and workspace_path not in resolved.parents:
+        raise ValueError("path 超出工作目录，禁止使用 .. 访问上级目录。")
+
+    return str(resolved)
+
+
+def _to_workspace_relpath(path: str, workspace: str) -> str:
+    """将绝对路径转换为 workspace 相对路径，兼容 /tmp 与 /private/tmp 真实路径差异。"""
+    workspace_path = Path(workspace).resolve()
+    target_path = Path(path).resolve()
+    return os.path.relpath(str(target_path), str(workspace_path))
 
 
 # ============ 工具：网页搜索（Tavily API）============
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY", "")
+SAFE_ENV_KEYS = {
+    "PATH",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TERM",
+    "TZ",
+    "SHELL",
+    "USER",
+    "LOGNAME",
+    "TMPDIR",
+    "TMP",
+    "TEMP",
+    "http_proxy",
+    "https_proxy",
+    "no_proxy",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+}
+
+
+def _read_positive_int_env(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+        return value if value > 0 else default
+    except ValueError:
+        return default
+
+
+WIDE_RESEARCH_MAX_ITEMS = _read_positive_int_env("MANUS_WIDE_RESEARCH_MAX_ITEMS", 20)
+WIDE_RESEARCH_MAX_CONCURRENCY = _read_positive_int_env("MANUS_WIDE_RESEARCH_CONCURRENCY", 5)
+
+
+def _build_sandbox_env(workspace: str) -> Dict[str, str]:
+    """构造工具子进程环境，默认不透传敏感变量。"""
+    inherit_all = os.environ.get("MANUS_SANDBOX_INHERIT_ENV", "").strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+    if inherit_all:
+        env = dict(os.environ)
+    else:
+        env = {k: v for k, v in os.environ.items() if k in SAFE_ENV_KEYS}
+
+    env["HOME"] = workspace
+    env["PWD"] = workspace
+    env.setdefault("TERM", "xterm-256color")
+    return env
+
+
+def _decode_duckduckgo_href(href: str) -> str:
+    if not href:
+        return ""
+    parsed = urlparse(href)
+    if "duckduckgo.com" in parsed.netloc and parsed.path.startswith("/l/"):
+        uddg = parse_qs(parsed.query).get("uddg", [])
+        if uddg:
+            return unquote(uddg[0])
+    return href
+
+
+def _duckduckgo_text_search(query: str, max_results: int = 5) -> List[Dict[str, Any]]:
+    """通过 DuckDuckGo HTML 页面抓取搜索结果，避免第三方封装兼容噪声。"""
+    import requests
+    from lxml import html
+
+    response = requests.get(
+        "https://duckduckgo.com/html/",
+        params={"q": query},
+        timeout=15,
+        headers={
+            "User-Agent": "Mozilla/5.0 (compatible; ManusMVP/1.0)",
+        },
+    )
+    response.raise_for_status()
+
+    doc = html.fromstring(response.text)
+    nodes = doc.xpath("//div[contains(@class, 'result')]")
+    results: List[Dict[str, Any]] = []
+    for node in nodes:
+        title_parts = node.xpath(".//a[contains(@class,'result__a')]//text()")
+        href_parts = node.xpath(".//a[contains(@class,'result__a')]/@href")
+        snippet_parts = node.xpath(".//*[contains(@class,'result__snippet')]//text()")
+
+        title = " ".join(part.strip() for part in title_parts if part.strip()).strip()
+        href = href_parts[0].strip() if href_parts else ""
+        body = " ".join(part.strip() for part in snippet_parts if part.strip()).strip()
+        if not title and not href:
+            continue
+
+        results.append({
+            "title": title or "无标题",
+            "href": _decode_duckduckgo_href(href),
+            "body": body,
+        })
+
+        if len(results) >= max_results:
+            break
+
+    return results
 
 async def web_search(query: str) -> str:
     """优先使用 Tavily；无 key 时回退到 DuckDuckGo 搜索"""
@@ -81,12 +210,10 @@ async def web_search(query: str) -> str:
 
             return output
 
-        from duckduckgo_search import DDGS
-
         loop = asyncio.get_event_loop()
         results = await loop.run_in_executor(
             None,
-            lambda: list(DDGS().text(query, max_results=5))
+            lambda: _duckduckgo_text_search(query, max_results=5)
         )
 
         if not results:
@@ -105,6 +232,120 @@ async def web_search(query: str) -> str:
         return f"搜索出错: {str(e)}。我可以基于已有知识为你提供相关信息。"
 
 
+# ============ 工具：Wide Research（并行研究）============
+def _slugify_name(text: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "_", text.strip())
+    slug = slug.strip("._-")
+    if not slug:
+        return "item"
+    return slug[:48]
+
+
+def _preview_text(text: str, max_chars: int = 220) -> str:
+    one_line = re.sub(r"\s+", " ", text).strip()
+    if len(one_line) <= max_chars:
+        return one_line
+    return one_line[:max_chars] + "..."
+
+
+async def wide_research(query_template: str, items: List[str]) -> str:
+    """
+    并行处理一组同质研究任务。
+    query_template 支持占位符 {item}，例如：\"{item} 公司最新融资进展\"。
+    """
+    cleaned_items = []
+    for raw in items:
+        if not isinstance(raw, str):
+            continue
+        value = raw.strip()
+        if value:
+            cleaned_items.append(value)
+
+    if not cleaned_items:
+        return "wide_research 执行失败: items 不能为空，且必须是字符串数组。"
+
+    truncated = False
+    if len(cleaned_items) > WIDE_RESEARCH_MAX_ITEMS:
+        cleaned_items = cleaned_items[:WIDE_RESEARCH_MAX_ITEMS]
+        truncated = True
+
+    workspace = _get_workspace()
+    results_dir = _resolve_workspace_path("research", workspace)
+    os.makedirs(results_dir, exist_ok=True)
+
+    semaphore = asyncio.Semaphore(WIDE_RESEARCH_MAX_CONCURRENCY)
+    conv_id = _get_current_conversation_id()
+
+    async def run_one(index: int, item: str) -> Dict[str, str]:
+        query = (
+            query_template.replace("{item}", item)
+            if "{item}" in query_template
+            else f"{query_template.strip()} {item}".strip()
+        )
+
+        async with semaphore:
+            content = await web_search(query)
+
+        filename = f"{index:03d}_{_slugify_name(item)}.md"
+        full_path = os.path.join(results_dir, filename)
+        body = (
+            f"# Research: {item}\n\n"
+            f"- Query: {query}\n\n"
+            "## Search Result\n\n"
+            f"{content}\n"
+        )
+        with open(full_path, "w", encoding="utf-8") as f:
+            f.write(body)
+
+        rel_path = _to_workspace_relpath(full_path, workspace)
+        await notify_file_change(rel_path, "created", conv_id)
+
+        return {
+            "item": item,
+            "query": query,
+            "path": rel_path,
+            "preview": _preview_text(content),
+        }
+
+    results = await asyncio.gather(
+        *(run_one(i + 1, item) for i, item in enumerate(cleaned_items))
+    )
+
+    summary_lines = [
+        "# Wide Research Summary",
+        "",
+        f"- Total items: {len(results)}",
+        f"- Max concurrency: {WIDE_RESEARCH_MAX_CONCURRENCY}",
+        "",
+        "## Outputs",
+    ]
+    for row in results:
+        summary_lines.append(f"- {row['item']}: `{row['path']}`")
+
+    summary_lines.append("")
+    summary_lines.append("## Quick Preview")
+    for row in results:
+        summary_lines.append(f"### {row['item']}")
+        summary_lines.append(f"- Query: {row['query']}")
+        summary_lines.append(f"- Preview: {row['preview']}")
+        summary_lines.append("")
+
+    summary_path = os.path.join(results_dir, "summary.md")
+    with open(summary_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(summary_lines))
+
+    summary_rel_path = _to_workspace_relpath(summary_path, workspace)
+    await notify_file_change(summary_rel_path, "modified", conv_id)
+
+    notice = (
+        "已完成并行研究。"
+        f"\n共处理 {len(results)} 个条目，汇总文件: {summary_rel_path}"
+    )
+    if truncated:
+        notice += f"\n注意: 已按上限裁剪到前 {WIDE_RESEARCH_MAX_ITEMS} 个条目。"
+    return notice
+
+
 # ============ 工具：Shell 命令执行（联动终端窗口）============
 def _is_background_shell_command(command: str) -> bool:
     """判断是否为显式后台命令（以单个 & 结尾，例如 `python app.py &`）"""
@@ -115,6 +356,7 @@ def _is_background_shell_command(command: str) -> bool:
 async def shell_exec(command: str) -> str:
     """在终端中执行 shell 命令，实时显示在计算机窗口"""
     workspace = _get_workspace()
+    sandbox_env = _build_sandbox_env(workspace)
     try:
         # 发布命令执行事件到终端窗口
         await event_bus.publish(_publish_event(
@@ -131,6 +373,7 @@ async def shell_exec(command: str) -> str:
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
                 cwd=workspace,
+                env=sandbox_env,
                 start_new_session=True,
             )
 
@@ -157,7 +400,8 @@ async def shell_exec(command: str) -> str:
             command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            cwd=workspace
+            cwd=workspace,
+            env=sandbox_env,
         )
 
         try:
@@ -207,6 +451,7 @@ async def shell_exec(command: str) -> str:
 async def execute_code(code: str) -> str:
     """在沙箱中执行 Python 代码，联动计算机窗口"""
     workspace = _get_workspace()
+    sandbox_env = _build_sandbox_env(workspace)
     try:
         code_path = os.path.join(workspace, "_temp_code.py")
 
@@ -237,7 +482,8 @@ async def execute_code(code: str) -> str:
             sys.executable, code_path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            cwd=workspace
+            cwd=workspace,
+            env=sandbox_env,
         )
 
         try:
@@ -269,7 +515,7 @@ async def execute_code(code: str) -> str:
         ))
 
         # 通知文件变更
-        await notify_file_change("_temp_code.py", "created", _current_conversation_id)
+        await notify_file_change("_temp_code.py", "created", _get_current_conversation_id())
 
         # 清理临时文件
         try:
@@ -286,7 +532,7 @@ async def execute_code(code: str) -> str:
 # ============ 工具：浏览器导航（联动浏览器窗口）============
 async def browser_navigate(url: str) -> str:
     """在浏览器中打开指定 URL"""
-    result = await browser_service.navigate(url, conversation_id=_current_conversation_id)
+    result = await browser_service.navigate(url, conversation_id=_get_current_conversation_id())
     if "error" in result:
         return f"浏览器导航失败: {result['error']}"
     return f"已打开网页: {result.get('title', '')} ({url})\n状态码: {result.get('status', 0)}"
@@ -295,14 +541,14 @@ async def browser_navigate(url: str) -> str:
 # ============ 工具：浏览器截图 ============
 async def browser_screenshot() -> str:
     """获取当前浏览器页面截图"""
-    result = await browser_service.screenshot(conversation_id=_current_conversation_id)
+    result = await browser_service.screenshot(conversation_id=_get_current_conversation_id())
     return f"已截取页面截图: {result.get('title', '')} ({result.get('url', '')})"
 
 
 # ============ 工具：浏览器获取内容 ============
 async def browser_get_content() -> str:
     """获取当前浏览器页面的文本内容"""
-    content = await browser_service.get_content()
+    content = await browser_service.get_content(conversation_id=_get_current_conversation_id())
     return content
 
 
@@ -311,8 +557,10 @@ async def read_file(path: str) -> str:
     """读取文件内容"""
     workspace = _get_workspace()
     try:
-        if not os.path.isabs(path):
-            path = os.path.join(workspace, path)
+        try:
+            path = _resolve_workspace_path(path, workspace)
+        except ValueError as e:
+            return f"读取文件出错: {str(e)}"
 
         if not os.path.exists(path):
             return f"文件不存在: {path}"
@@ -321,7 +569,7 @@ async def read_file(path: str) -> str:
             content = f.read()
 
         # 通知编辑器窗口
-        rel_path = os.path.relpath(path, workspace) if path.startswith(workspace) else path
+        rel_path = _to_workspace_relpath(path, workspace)
         await event_bus.publish(_publish_event(
             "file_opened",
             {
@@ -353,8 +601,10 @@ async def write_file(path: str, content: str) -> str:
         if not isinstance(content, str):
             return "写入文件出错: 参数 content 必须是字符串。"
 
-        if not os.path.isabs(path):
-            path = os.path.join(workspace, path)
+        try:
+            path = _resolve_workspace_path(path, workspace)
+        except ValueError as e:
+            return f"写入文件出错: {str(e)}"
 
         if os.path.isdir(path):
             return f"写入文件出错: path 指向目录而不是文件: {path}"
@@ -369,7 +619,7 @@ async def write_file(path: str, content: str) -> str:
             f.write(content)
 
         # 通知编辑器窗口
-        rel_path = os.path.relpath(path, workspace) if path.startswith(workspace) else path
+        rel_path = _to_workspace_relpath(path, workspace)
         await event_bus.publish(_publish_event(
             "file_opened",
             {
@@ -382,7 +632,11 @@ async def write_file(path: str, content: str) -> str:
         ))
 
         # 通知文件变更
-        await notify_file_change(rel_path, "modified" if existed else "created", _current_conversation_id)
+        await notify_file_change(
+            rel_path,
+            "modified" if existed else "created",
+            _get_current_conversation_id(),
+        )
 
         return f"文件已成功写入: {path} ({len(content)} 字符)"
 
@@ -411,6 +665,21 @@ TOOL_REGISTRY = {
         "non_empty_keys": ["query"],
         "string_keys": ["query"],
         "usage_hint": '示例: {"query": "最新 AI 行业动态"}',
+    },
+    "wide_research": {
+        "func": wide_research,
+        "extract_args": lambda args: {
+            "query_template": args.get("query_template"),
+            "items": args.get("items"),
+        },
+        "required_keys": ["query_template", "items"],
+        "non_empty_keys": ["query_template"],
+        "string_keys": ["query_template"],
+        "list_string_keys": ["items"],
+        "usage_hint": (
+            '示例: {"query_template": "{item} 公司 2026 最新动态", '
+            '"items": ["OpenAI", "Anthropic", "Google DeepMind"]}'
+        ),
     },
     "shell_exec": {
         "func": shell_exec,
@@ -468,8 +737,7 @@ TOOL_REGISTRY = {
 
 async def execute_tool(name: str, arguments: Dict[str, Any], conversation_id: Optional[str] = None) -> str:
     """执行指定工具（带会话隔离）"""
-    global _current_conversation_id
-    _current_conversation_id = conversation_id
+    token = _current_conversation_id.set(conversation_id)
 
     try:
         if name not in TOOL_REGISTRY:
@@ -484,6 +752,7 @@ async def execute_tool(name: str, arguments: Dict[str, Any], conversation_id: Op
         required_keys = tool.get("required_keys", [])
         non_empty_keys = tool.get("non_empty_keys", [])
         string_keys = tool.get("string_keys", [])
+        list_string_keys = tool.get("list_string_keys", [])
         usage_hint = tool.get("usage_hint", "")
 
         missing_keys = [k for k in required_keys if k not in kwargs or kwargs.get(k) is None]
@@ -509,7 +778,21 @@ async def execute_tool(name: str, arguments: Dict[str, Any], conversation_id: Op
             hint = f" {usage_hint}" if usage_hint else ""
             raise ValueError(f"工具 `{name}` 参数类型错误(应为字符串): {', '.join(wrong_type_keys)}。{hint}".strip())
 
+        wrong_list_keys = []
+        for k in list_string_keys:
+            v = kwargs.get(k)
+            if not isinstance(v, list) or not v:
+                wrong_list_keys.append(k)
+                continue
+            if any((not isinstance(item, str)) or (not item.strip()) for item in v):
+                wrong_list_keys.append(k)
+        if wrong_list_keys:
+            hint = f" {usage_hint}" if usage_hint else ""
+            raise ValueError(
+                f"工具 `{name}` 参数格式错误(应为非空字符串数组): {', '.join(wrong_list_keys)}。{hint}".strip()
+            )
+
         result = await tool["func"](**kwargs)
         return result
     finally:
-        _current_conversation_id = None
+        _current_conversation_id.reset(token)

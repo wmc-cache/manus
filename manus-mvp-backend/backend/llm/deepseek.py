@@ -77,12 +77,13 @@ SYSTEM_PROMPT = """你是 Manus，一个强大的 AI Agent 助手。你在一台
 
 你拥有以下工具能力：
 1. **web_search** - 搜索互联网获取最新信息
-2. **shell_exec** - 在终端中执行 shell 命令（用户可以在终端窗口看到）
-3. **execute_code** - 执行 Python 代码（代码会显示在编辑器窗口中）
-4. **browser_navigate** - 在浏览器中打开网页（用户可以在浏览器窗口看到截图）
-5. **browser_get_content** - 获取当前浏览器页面的文本内容
-6. **read_file** - 读取文件内容（文件会在编辑器窗口中显示）
-7. **write_file** - 创建或写入文件（文件会在编辑器窗口中显示）
+2. **wide_research** - 并行研究多个对象并自动产出汇总文件
+3. **shell_exec** - 在终端中执行 shell 命令（用户可以在终端窗口看到）
+4. **execute_code** - 执行 Python 代码（代码会显示在编辑器窗口中）
+5. **browser_navigate** - 在浏览器中打开网页（用户可以在浏览器窗口看到截图）
+6. **browser_get_content** - 获取当前浏览器页面的文本内容
+7. **read_file** - 读取文件内容（文件会在编辑器窗口中显示）
+8. **write_file** - 创建或写入文件（文件会在编辑器窗口中显示）
 
 工作流程：
 1. 分析用户的请求，理解任务目标
@@ -101,6 +102,7 @@ SYSTEM_PROMPT = """你是 Manus，一个强大的 AI Agent 助手。你在一台
 - 写入文件后，文件会自动出现在用户的文件管理器窗口中
 - **严禁在缺少参数时调用工具：write_file 必须同时提供 path 和 content；read_file 必须提供 path。若信息不足，先询问用户或先通过其他工具获取。**
 - **写入长代码文件时每轮只调用 1 次 write_file；若内容过长，先写可运行最小版本再增量完善，避免参数 JSON 被截断。**
+- **使用 wide_research 时，优先给出清晰的 query_template 和精简的 items 列表（例如 5~20 个），完成后读取汇总文件再给出结论。**
 """
 
 # 工具定义（OpenAI Function Calling 格式）
@@ -119,6 +121,30 @@ TOOLS = [
                     }
                 },
                 "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "wide_research",
+            "description": "并行研究多个对象。会基于 query_template 对每个 item 执行搜索，并在工作目录 research/ 下产出分项结果和 summary.md。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query_template": {
+                        "type": "string",
+                        "description": "查询模板，支持 {item} 占位符，如 '{item} 公司 2026 最新动态'"
+                    },
+                    "items": {
+                        "type": "array",
+                        "description": "待研究对象列表（字符串数组）",
+                        "items": {
+                            "type": "string"
+                        }
+                    }
+                },
+                "required": ["query_template", "items"]
             }
         }
     },
@@ -279,6 +305,20 @@ def _normalize_tool_calls(raw_tool_calls: Any) -> List[Dict[str, Any]]:
     return tool_calls
 
 
+def _select_tools(allowed_tool_names: Optional[List[str]]) -> List[Dict[str, Any]]:
+    """按名称筛选可用工具；为空时返回全部工具。"""
+    if allowed_tool_names is None:
+        return TOOLS
+    allow = {name.strip() for name in allowed_tool_names if isinstance(name, str) and name.strip()}
+    if not allow:
+        return []
+    return [
+        tool
+        for tool in TOOLS
+        if tool.get("function", {}).get("name") in allow
+    ]
+
+
 async def _create_completion(kwargs: Dict[str, Any]):
     """创建补全请求，必要时对 max_tokens 做一次回退重试。"""
     try:
@@ -298,6 +338,7 @@ async def _create_completion(kwargs: Dict[str, Any]):
 async def chat_completion_stream(
     messages: List[Dict[str, Any]],
     use_tools: bool = True,
+    allowed_tool_names: Optional[List[str]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """流式调用 DeepSeek API"""
     if not DEEPSEEK_API_KEY:
@@ -315,8 +356,9 @@ async def chat_completion_stream(
             "temperature": 0.7,
             "max_tokens": DEEPSEEK_MAX_TOKENS,
         }
-        if use_tools:
-            kwargs["tools"] = TOOLS
+        selected_tools = _select_tools(allowed_tool_names)
+        if use_tools and selected_tools:
+            kwargs["tools"] = selected_tools
             kwargs["tool_choice"] = "auto"
 
         response = await _create_completion(kwargs)
@@ -384,6 +426,7 @@ async def chat_completion_stream(
 async def chat_completion(
     messages: List[Dict[str, Any]],
     use_tools: bool = True,
+    allowed_tool_names: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """非流式调用 DeepSeek API"""
     if not DEEPSEEK_API_KEY:
@@ -399,8 +442,9 @@ async def chat_completion(
             "temperature": 0.7,
             "max_tokens": DEEPSEEK_MAX_TOKENS,
         }
-        if use_tools:
-            kwargs["tools"] = TOOLS
+        selected_tools = _select_tools(allowed_tool_names)
+        if use_tools and selected_tools:
+            kwargs["tools"] = selected_tools
             kwargs["tool_choice"] = "auto"
 
         response = await _create_completion(kwargs)

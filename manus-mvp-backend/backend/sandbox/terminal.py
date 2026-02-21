@@ -9,6 +9,7 @@ import fcntl
 import termios
 from typing import Optional, Dict
 from sandbox.event_bus import event_bus, SandboxEvent
+from sandbox.filesystem import get_workspace_root
 
 
 class TerminalSession:
@@ -193,7 +194,8 @@ class TerminalManager:
             self._counter += 1
             session_id = f"term_{self._counter}"
 
-        session = TerminalSession(session_id, conversation_id=conversation_id)
+        cwd = get_workspace_root(conversation_id)
+        session = TerminalSession(session_id, cwd=cwd, conversation_id=conversation_id)
         await session.start()
         self.sessions[session_id] = session
         return session

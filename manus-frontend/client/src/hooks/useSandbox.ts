@@ -5,10 +5,16 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
+const API_TOKEN = (import.meta.env.VITE_MANUS_API_TOKEN || "").trim();
 const WS_BASE = API_BASE.startsWith("https://")
   ? API_BASE.replace(/^https:/, "wss:")
   : API_BASE.replace(/^http:/, "ws:");
-const WS_URL = `${WS_BASE}/ws/sandbox`;
+const WS_URL = `${WS_BASE}/ws/sandbox${API_TOKEN ? `?token=${encodeURIComponent(API_TOKEN)}` : ""}`;
+
+function buildAuthHeaders(base: Record<string, string> = {}): Record<string, string> {
+  if (!API_TOKEN) return base;
+  return { ...base, Authorization: `Bearer ${API_TOKEN}` };
+}
 
 export interface SandboxEvent {
   type: string;
@@ -77,7 +83,9 @@ export function useSandbox() {
     try {
       const convId = currentConvIdRef.current;
       const params = convId ? `?conversation_id=${encodeURIComponent(convId)}` : "";
-      const res = await fetch(`${API_BASE}/api/sandbox/files${params}`);
+      const res = await fetch(`${API_BASE}/api/sandbox/files${params}`, {
+        headers: buildAuthHeaders(),
+      });
       const data = await res.json();
       setFileTree(data.tree || []);
     } catch {
@@ -107,7 +115,7 @@ export function useSandbox() {
     setBrowserInteractionError(null);
 
     // 通知后端 WebSocket 切换订阅
-    if (wsRef.current?.readyState === WebSocket.OPEN && conversationId) {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(
         JSON.stringify({
           type: "subscribe_conversation",
@@ -130,16 +138,14 @@ export function useSandbox() {
 
       ws.onopen = () => {
         setConnected(true);
-        // 如果已有 conversation_id，重新订阅
+        // 重新建立连接时，始终同步当前订阅会话（允许为 null）
         const convId = currentConvIdRef.current;
-        if (convId) {
-          ws.send(
-            JSON.stringify({
-              type: "subscribe_conversation",
-              conversation_id: convId,
-            })
-          );
-        }
+        ws.send(
+          JSON.stringify({
+            type: "subscribe_conversation",
+            conversation_id: convId,
+          })
+        );
         fetchFileTreeRef.current();
       };
 
@@ -150,8 +156,13 @@ export function useSandbox() {
           // 只处理当前对话的事件（或无 conversation_id 的全局事件）
           const eventConvId = data.conversation_id;
           const currentConvId = currentConvIdRef.current;
-          if (eventConvId && currentConvId && eventConvId !== currentConvId) {
-            return; // 忽略其他对话的事件
+          if (currentConvId) {
+            if (eventConvId && eventConvId !== currentConvId) {
+              return; // 忽略其他对话的事件
+            }
+          } else if (eventConvId) {
+            // 当前未选中会话时，忽略所有会话级事件
+            return;
           }
 
           setEvents((prev) => [...prev.slice(-200), data]);
@@ -341,7 +352,9 @@ export function useSandbox() {
       const convId = currentConvIdRef.current;
       const params = new URLSearchParams({ path });
       if (convId) params.set("conversation_id", convId);
-      const res = await fetch(`${API_BASE}/api/sandbox/files/content?${params.toString()}`);
+      const res = await fetch(`${API_BASE}/api/sandbox/files/content?${params.toString()}`, {
+        headers: buildAuthHeaders(),
+      });
       const data = await res.json();
       if (!data.error) {
         setEditorFile(data as FileContent);
