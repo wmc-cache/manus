@@ -2,6 +2,7 @@
 import os
 import sys
 import json
+import re
 import asyncio
 import tempfile
 import traceback
@@ -105,6 +106,12 @@ async def web_search(query: str) -> str:
 
 
 # ============ 工具：Shell 命令执行（联动终端窗口）============
+def _is_background_shell_command(command: str) -> bool:
+    """判断是否为显式后台命令（以单个 & 结尾，例如 `python app.py &`）"""
+    text = command.strip()
+    return bool(re.search(r"(?<!&)&\s*$", text))
+
+
 async def shell_exec(command: str) -> str:
     """在终端中执行 shell 命令，实时显示在计算机窗口"""
     workspace = _get_workspace()
@@ -115,6 +122,35 @@ async def shell_exec(command: str) -> str:
             {"command": command, "session_id": "default"},
             window_id="terminal_default"
         ))
+
+        # 后台命令（末尾带 &）不应阻塞等待输出，否则容易卡住。
+        if _is_background_shell_command(command):
+            process = await asyncio.create_subprocess_shell(
+                command,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+                cwd=workspace,
+                start_new_session=True,
+            )
+
+            try:
+                await asyncio.wait_for(process.wait(), timeout=3)
+            except asyncio.TimeoutError:
+                try:
+                    process.kill()
+                    await asyncio.wait_for(process.wait(), timeout=1)
+                except Exception:
+                    pass
+                return "后台命令启动失败：启动器未在预期时间内退出。"
+
+            result = "后台命令已启动。你可以继续后续步骤（如打开浏览器访问服务）。"
+            await event_bus.publish(_publish_event(
+                "terminal_output",
+                {"session_id": "default", "data": f"{result}\n"},
+                window_id="terminal_default"
+            ))
+            return result
 
         # 使用 subprocess 执行命令
         process = await asyncio.create_subprocess_shell(
@@ -129,8 +165,16 @@ async def shell_exec(command: str) -> str:
                 process.communicate(), timeout=30
             )
         except asyncio.TimeoutError:
-            process.kill()
-            await process.communicate()
+            # 防止二次等待卡死：杀进程后再次等待也加超时保护。
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
+
+            try:
+                await asyncio.wait_for(process.communicate(), timeout=2)
+            except Exception:
+                pass
             return "命令执行超时（30秒限制）"
 
         output = ""
