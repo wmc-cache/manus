@@ -11,7 +11,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Quer
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
-from models.schemas import ChatRequest
+from models.schemas import ChatRequest, SSEEventType
 from agent.core import agent_engine
 from sandbox.event_bus import event_bus, SandboxEvent
 from sandbox.filesystem import get_file_tree, read_file_content, get_workspace_root
@@ -94,27 +94,84 @@ async def chat(request: ChatRequest):
     # 先解析会话并加锁，避免同一 conversation 并发请求造成消息/计划状态错乱
     conversation = agent_engine.get_or_create_conversation(request.conversation_id)
     conversation_lock = agent_engine.get_conversation_lock(conversation.id)
+    is_control_continue = bool(request.control_continue)
 
     async def event_generator():
-        if conversation_lock.locked():
-            yield {
-                "event": "thinking",
-                "data": json.dumps({
-                    "iteration": 0,
-                    "status": "queued",
-                    "message": "当前会话有任务正在执行，已进入队列等待。",
-                }, ensure_ascii=False),
-            }
+        registered_resume = False
+        started_execution = False
 
-        async with conversation_lock:
-            async for event in agent_engine.run_agent_loop(
-                user_message=request.message,
-                conversation_id=conversation.id
-            ):
+        # control_continue 只保留一个排队/执行实例，避免刷新导致重复“继续”
+        if is_control_continue:
+            # 进程异常/崩溃后可能残留标记，锁空闲时自动清理
+            if conversation.resume_pending and not conversation_lock.locked():
+                conversation.resume_pending = False
+                agent_engine._save_conversations()
+
+            if conversation.resume_pending:
                 yield {
-                    "event": event["event"].value if hasattr(event["event"], 'value') else event["event"],
-                    "data": event["data"]
+                    "event": SSEEventType.THINKING.value,
+                    "data": json.dumps({
+                        "iteration": 0,
+                        "status": "already_running",
+                        "message": "当前会话已有自动续跑请求在执行或排队中。",
+                    }, ensure_ascii=False),
                 }
+                yield {
+                    "event": SSEEventType.DONE.value,
+                    "data": json.dumps({
+                        "conversation_id": conversation.id,
+                        "iterations": 0,
+                        "limit_reached": False,
+                        "already_running": True,
+                    }, ensure_ascii=False),
+                }
+                return
+
+            conversation.resume_pending = True
+            agent_engine._save_conversations()
+            registered_resume = True
+
+        try:
+            if conversation_lock.locked():
+                queue_message = (
+                    "当前会话有任务正在执行，已进入队列等待。"
+                    if not is_control_continue
+                    else "检测到任务仍在执行，已自动登记续跑请求，待当前任务结束后继续。"
+                )
+                yield {
+                    "event": SSEEventType.THINKING.value,
+                    "data": json.dumps({
+                        "iteration": 0,
+                        "status": "queued",
+                        "message": queue_message,
+                    }, ensure_ascii=False),
+                }
+
+            async with conversation_lock:
+                started_execution = True
+                conversation.awaiting_resume = False
+                agent_engine._save_conversations()
+                async for event in agent_engine.run_agent_loop(
+                    user_message=request.message,
+                    conversation_id=conversation.id,
+                    record_user_message=not is_control_continue,
+                ):
+                    yield {
+                        "event": event["event"].value if hasattr(event["event"], 'value') else event["event"],
+                        "data": event["data"]
+                    }
+                conversation.awaiting_resume = False
+                agent_engine._save_conversations()
+        except asyncio.CancelledError:
+            # 客户端中断连接（如刷新）后，标记为可恢复
+            if started_execution:
+                conversation.awaiting_resume = True
+                agent_engine._save_conversations()
+            raise
+        finally:
+            if registered_resume and conversation.resume_pending:
+                conversation.resume_pending = False
+                agent_engine._save_conversations()
 
     return EventSourceResponse(event_generator())
 
@@ -139,6 +196,8 @@ async def list_conversations():
             "manual_takeover_target": conv.manual_takeover_target,
             "limit_reached": conv.limit_reached,
             "continue_message": conv.continue_message,
+            "awaiting_resume": conv.awaiting_resume,
+            "resume_pending": conv.resume_pending,
             "plan_goal": conv.plan.goal if conv.plan else None,
             "plan_current_phase_id": running_phase,
         })
@@ -179,6 +238,8 @@ async def get_conversation(conversation_id: str):
         "messages": messages,
         "limit_reached": conv.limit_reached,
         "continue_message": conv.continue_message,
+        "awaiting_resume": conv.awaiting_resume,
+        "resume_pending": conv.resume_pending,
         "plan": conv.plan.model_dump(mode="json") if conv.plan else None,
         "created_at": conv.created_at.isoformat(),
         "manual_takeover_enabled": conv.manual_takeover_enabled,

@@ -348,7 +348,8 @@ class AgentEngine:
     async def run_agent_loop(
         self,
         user_message: str,
-        conversation_id: Optional[str] = None
+        conversation_id: Optional[str] = None,
+        record_user_message: bool = True,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
         运行 Agent 循环，通过 SSE 事件流返回结果。
@@ -362,9 +363,10 @@ class AgentEngine:
         # 获取或创建对话
         conversation = self.get_or_create_conversation(conversation_id)
 
-        # 添加用户消息
-        user_msg = Message(role=MessageRole.USER, content=user_message)
-        conversation.messages.append(user_msg)
+        # 添加用户消息（控制指令可选择不写入会话历史）
+        if record_user_message:
+            user_msg = Message(role=MessageRole.USER, content=user_message)
+            conversation.messages.append(user_msg)
         # 进入新一轮执行时，先清除“可继续”标记
         conversation.limit_reached = False
         conversation.continue_message = None
@@ -372,8 +374,8 @@ class AgentEngine:
         # 更新计划（初始化或恢复）
         plan_reason = self._ensure_plan_for_turn(conversation, user_message)
 
-        # 如果是第一条消息，设置对话标题
-        if len(conversation.messages) == 1:
+        # 如果是第一条真实用户消息，设置对话标题
+        if record_user_message and len(conversation.messages) == 1:
             conversation.title = user_message[:50]
         self._save_conversations()
 

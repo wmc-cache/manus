@@ -30,6 +30,7 @@ class PlanPhaseStatus(str, Enum):
 class ChatRequest(BaseModel):
     message: str
     conversation_id: Optional[str] = None
+    control_continue: bool = False
 
 
 class ToolCall(BaseModel):
@@ -70,6 +71,8 @@ class Conversation(BaseModel):
     manual_takeover_target: str = "all"
     limit_reached: bool = False
     continue_message: Optional[str] = None
+    awaiting_resume: bool = False
+    resume_pending: bool = False
     created_at: datetime = Field(default_factory=datetime.now)
 
 

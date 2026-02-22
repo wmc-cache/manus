@@ -23,6 +23,8 @@ export interface Conversation {
   messages: Message[];
   messageCount?: number;
   createdAt: string;
+  awaitingResume?: boolean;
+  resumePending?: boolean;
 }
 
 // ============ SSE 事件类型 ============
@@ -72,6 +74,7 @@ export interface DoneEventData {
   limit_reached?: boolean;
   max_iterations?: number;
   continue_message?: string;
+  already_running?: boolean;
 }
 
 // ============ 工具名称映射 ============
