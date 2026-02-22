@@ -7,6 +7,8 @@ import type {
   ToolCallEventData,
   ToolResultEventData,
   DoneEventData,
+  PlanUpdateEventData,
+  TaskPlanData,
 } from "@/types";
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
@@ -104,6 +106,9 @@ interface AgentState {
   iteration: number;
   limitReached: boolean;
   continueMessage: string | null;
+  plan: TaskPlanData | null;
+  planReason: string | null;
+  todoPath: string | null;
 }
 
 interface SendMessageOptions {
@@ -143,6 +148,7 @@ interface ConversationDetailResponse {
   continue_message?: string | null;
   awaiting_resume?: boolean;
   resume_pending?: boolean;
+  plan?: TaskPlanData | null;
   created_at: string;
 }
 
@@ -207,6 +213,34 @@ function isContinueCommand(message: string): boolean {
   return CONTINUE_MESSAGES.has(text);
 }
 
+function normalizePlan(raw: unknown): TaskPlanData | null {
+  if (!raw || typeof raw !== "object") return null;
+  const plan = raw as Partial<TaskPlanData>;
+  if (typeof plan.goal !== "string") return null;
+
+  const phases = Array.isArray(plan.phases)
+    ? plan.phases
+        .filter((phase): phase is TaskPlanData["phases"][number] => (
+          !!phase
+          && typeof phase === "object"
+          && typeof (phase as TaskPlanData["phases"][number]).id === "number"
+          && typeof (phase as TaskPlanData["phases"][number]).title === "string"
+          && typeof (phase as TaskPlanData["phases"][number]).status === "string"
+        ))
+        .map((phase) => ({
+          id: phase.id,
+          title: phase.title,
+          status: phase.status,
+        }))
+    : [];
+
+  return {
+    goal: plan.goal,
+    phases,
+    current_phase_id: typeof plan.current_phase_id === "number" ? plan.current_phase_id : null,
+  };
+}
+
 export function useAgent() {
   const [state, setState] = useState<AgentState>({
     conversations: [],
@@ -219,6 +253,9 @@ export function useAgent() {
     iteration: 0,
     limitReached: false,
     continueMessage: null,
+    plan: null,
+    planReason: null,
+    todoPath: null,
   });
 
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -296,6 +333,9 @@ export function useAgent() {
         iteration: 0,
         limitReached,
         continueMessage,
+        plan: normalizePlan(data.plan),
+        planReason: null,
+        todoPath: null,
       }));
       safeSetLocalStorage(ACTIVE_CONVERSATION_STORAGE_KEY, data.id);
 
@@ -523,6 +563,18 @@ export function useAgent() {
                   break;
                 }
 
+                case "plan_update": {
+                  const planData = data as PlanUpdateEventData;
+                  const normalizedPlan = normalizePlan(planData.plan);
+                  setState((prev) => ({
+                    ...prev,
+                    plan: normalizedPlan ?? prev.plan,
+                    planReason: typeof planData.reason === "string" ? planData.reason : prev.planReason,
+                    todoPath: typeof planData.todo_path === "string" ? planData.todo_path : prev.todoPath,
+                  }));
+                  break;
+                }
+
                 case "done":
                   {
                     const doneData = data as DoneEventData;
@@ -673,6 +725,9 @@ export function useAgent() {
         iteration: 0,
         limitReached: false,
         continueMessage: null,
+        plan: null,
+        planReason: null,
+        todoPath: null,
       }));
       return true;
     } catch (err) {
@@ -699,6 +754,9 @@ export function useAgent() {
       iteration: 0,
       limitReached: false,
       continueMessage: null,
+      plan: null,
+      planReason: null,
+      todoPath: null,
     }));
   }, []);
 

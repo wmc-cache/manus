@@ -64,15 +64,20 @@ class EventBus:
         if len(self._history[conv_id]) > self._max_history_per_conv:
             self._history[conv_id] = self._history[conv_id][-self._max_history_per_conv:]
 
-        dead_queues = set()
         for queue in self._queues:
             try:
                 queue.put_nowait(event)
             except asyncio.QueueFull:
-                dead_queues.add(queue)
-
-        for q in dead_queues:
-            self._queues.discard(q)
+                # 队列满时优先丢弃最旧事件，保持订阅不断开。
+                try:
+                    queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
+                try:
+                    queue.put_nowait(event)
+                except asyncio.QueueFull:
+                    # 极端并发下仍可能满，直接跳过本次事件。
+                    continue
 
     def get_history(self, conversation_id: Optional[str] = None) -> list:
         """获取事件历史（可按 conversation_id 过滤）"""

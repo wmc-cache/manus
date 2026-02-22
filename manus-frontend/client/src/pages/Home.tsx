@@ -21,6 +21,13 @@ import ChatInput from "@/components/ChatInput";
 import ComputerPanel from "@/components/sandbox/ComputerPanel";
 import { toast } from "sonner";
 
+const PLAN_STATUS_LABEL: Record<string, string> = {
+  pending: "待执行",
+  running: "执行中",
+  completed: "已完成",
+  failed: "失败",
+};
+
 const HERO_BG =
   "https://private-us-east-1.manuscdn.com/sessionFile/wYRFO7o4twJWKVfWlISpqY/sandbox/drOIOkPpOFG7RUVTquZoNi-img-1_1771589325000_na1fn_aGVyby1iZw.png?x-oss-process=image/resize,w_1920,h_1920/format,webp/quality,q_80&Expires=1798761600&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly9wcml2YXRlLXVzLWVhc3QtMS5tYW51c2Nkbi5jb20vc2Vzc2lvbkZpbGUvd1lSRk83bzR0d0pXS1ZmV2xJU3BxWS9zYW5kYm94L2RyT0lPa1BwT0ZHN1JVVlRxdVpvTmktaW1nLTFfMTc3MTU4OTMyNTAwMF9uYTFmbl9hR1Z5YnkxaVp3LnBuZz94LW9zcy1wcm9jZXNzPWltYWdlL3Jlc2l6ZSx3XzE5MjAsaF8xOTIwL2Zvcm1hdCx3ZWJwL3F1YWxpdHkscV84MCIsIkNvbmRpdGlvbiI6eyJEYXRlTGVzc1RoYW4iOnsiQVdTOkVwb2NoVGltZSI6MTc5ODc2MTYwMH19fV19&Key-Pair-Id=K2HSFNDJXOU9YS&Signature=bLV0gYsEmcPgJBG-cXYD2csT3PZ-duS39GcAI3N41yZoT3xOBgXHuzp2BCO2vC8YHdisx~Z11Ihq5Y6e51f2wUIpYhtvEG73mP92xhMxX85lMa~73jqZiqTwagT3gOc2iEtU9l9vbUfrNNWZcgt6KesNAhYIaKGk0dxlEkS4ZnSqHeM~sPF~KntQvY3rprWr51kL-qPnqXn1rWgCbYkgU0tdhSN0oFu2HBnygMIGWtPpmfj5l0Ts0WrD~UmBURNrVIYw8ECC-WRACa84M3G75csooYLAW5F8JpRviklNLneu9iW3oLUUUbQcJqKM57E08UicyQ~SoeVTkaUZGSxIUg__";
 
@@ -34,6 +41,9 @@ export default function Home() {
     iteration,
     limitReached,
     continueMessage,
+    plan,
+    planReason,
+    todoPath,
     conversationId,
     sendMessage,
     loadConversation,
@@ -210,6 +220,42 @@ export default function Home() {
               <EmptyState onSuggestionClick={handleSuggestionClick} />
             ) : (
               <div className="max-w-3xl mx-auto px-4 py-6">
+                {plan && (
+                  <div className="mx-4 mb-3 rounded-xl border border-border/30 bg-background/40 p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs text-muted-foreground">执行计划</p>
+                      {planReason && (
+                        <span className="text-[11px] text-muted-foreground/80">{planReason}</span>
+                      )}
+                    </div>
+                    <p className="mt-1 text-sm text-foreground/95">{plan.goal || "当前任务"}</p>
+                    <div className="mt-2 space-y-1">
+                      {plan.phases.map((phase) => {
+                        const status = PLAN_STATUS_LABEL[phase.status] || phase.status;
+                        const isRunning = phase.status === "running";
+                        return (
+                          <div
+                            key={phase.id}
+                            className={`flex items-center justify-between rounded-md border px-2 py-1 text-xs ${
+                              isRunning
+                                ? "border-primary/40 bg-primary/10 text-primary"
+                                : "border-border/30 bg-background/30 text-muted-foreground"
+                            }`}
+                          >
+                            <span>{phase.id}. {phase.title}</span>
+                            <span>{status}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {todoPath && (
+                      <p className="mt-2 text-[11px] text-muted-foreground/80 font-mono break-all">
+                        {todoPath}
+                      </p>
+                    )}
+                  </div>
+                )}
+
                 {messages.map((msg) => (
                   <MessageBubble key={msg.id} message={msg} />
                 ))}

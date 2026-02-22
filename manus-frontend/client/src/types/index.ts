@@ -77,6 +77,28 @@ export interface DoneEventData {
   already_running?: boolean;
 }
 
+// ============ 计划相关类型 ============
+
+export type PlanPhaseStatus = "pending" | "running" | "completed" | "failed" | string;
+
+export interface PlanPhaseData {
+  id: number;
+  title: string;
+  status: PlanPhaseStatus;
+}
+
+export interface TaskPlanData {
+  goal: string;
+  current_phase_id?: number | null;
+  phases: PlanPhaseData[];
+}
+
+export interface PlanUpdateEventData {
+  reason?: string;
+  plan?: TaskPlanData;
+  todo_path?: string;
+}
+
 // ============ 工具名称映射 ============
 
 export const TOOL_NAMES: Record<string, string> = {

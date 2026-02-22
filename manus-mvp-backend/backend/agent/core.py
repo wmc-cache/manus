@@ -2,11 +2,13 @@
 import asyncio
 import json
 import os
+import logging
 from pathlib import Path
 from typing import AsyncGenerator, Dict, Any, List, Optional
 
+from agent.context_manager import build_default_context_manager, ToolStateMachine
 from agent.tools import execute_tool
-from llm.deepseek import chat_completion
+from llm.deepseek import chat_completion, chat_completion_stream
 from models.schemas import (
     SSEEventType,
     Conversation,
@@ -22,7 +24,21 @@ from sandbox.event_bus import event_bus, SandboxEvent
 from sandbox.filesystem import get_workspace_root
 
 
-MAX_ITERATIONS = 10  # 最大迭代次数，防止无限循环
+logger = logging.getLogger(__name__)
+
+
+def _read_positive_int_env(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+        return value if value > 0 else default
+    except ValueError:
+        return default
+
+
+MAX_ITERATIONS = _read_positive_int_env("MANUS_MAX_ITERATIONS", 30)
 DEFAULT_CONVERSATION_STORE = "/tmp/manus_workspace/conversations.json"
 MAX_CONTEXT_MESSAGES = int(os.environ.get("MANUS_MAX_CONTEXT_MESSAGES", "40"))
 MAX_RECENT_MESSAGE_CHARS = int(os.environ.get("MANUS_MAX_RECENT_MESSAGE_CHARS", "4000"))
@@ -50,6 +66,13 @@ class AgentEngine:
         self._conversation_locks: Dict[str, asyncio.Lock] = {}
         self._store_path = Path(os.environ.get("MANUS_CONVERSATIONS_FILE", DEFAULT_CONVERSATION_STORE))
         self._store_path.parent.mkdir(parents=True, exist_ok=True)
+        self._save_fail_streak = 0
+        self._context_manager = build_default_context_manager(
+            max_context_messages=MAX_CONTEXT_MESSAGES,
+            max_recent_message_chars=MAX_RECENT_MESSAGE_CHARS,
+            max_old_message_chars=MAX_OLD_MESSAGE_CHARS,
+        )
+        self._tool_state_machine = ToolStateMachine()
         self._load_conversations()
 
     def get_conversation_lock(self, conversation_id: str) -> asyncio.Lock:
@@ -92,9 +115,26 @@ class AgentEngine:
                 encoding="utf-8"
             )
             tmp_path.replace(self._store_path)
-        except Exception:
-            # 不因持久化异常中断主流程
-            pass
+            if self._save_fail_streak > 0:
+                logger.info(
+                    "Conversation persistence recovered after %d failures.",
+                    self._save_fail_streak,
+                )
+            self._save_fail_streak = 0
+        except Exception as exc:
+            # 不因持久化异常中断主流程，但要记录并告警
+            self._save_fail_streak += 1
+            logger.warning(
+                "Failed to persist conversations to %s (streak=%d): %s",
+                self._store_path,
+                self._save_fail_streak,
+                exc,
+            )
+            if self._save_fail_streak >= 3:
+                logger.error(
+                    "ALERT: conversation persistence failed %d consecutive times.",
+                    self._save_fail_streak,
+                )
 
     def get_or_create_conversation(self, conversation_id: Optional[str] = None) -> Conversation:
         """获取或创建对话"""
@@ -262,6 +302,29 @@ class AgentEngine:
         return changed
 
     @staticmethod
+    def _transition_plan_to_finalizing(plan: Optional[TaskPlan]) -> bool:
+        if not plan:
+            return False
+
+        changed = False
+        phase2 = next((p for p in plan.phases if p.id == 2), None)
+        phase3 = next((p for p in plan.phases if p.id == 3), None)
+
+        if phase2 and phase2.status != PlanPhaseStatus.COMPLETED:
+            phase2.status = PlanPhaseStatus.COMPLETED
+            changed = True
+
+        if phase3 and phase3.status != PlanPhaseStatus.RUNNING:
+            phase3.status = PlanPhaseStatus.RUNNING
+            changed = True
+
+        if phase3 and plan.current_phase_id != phase3.id:
+            plan.current_phase_id = phase3.id
+            changed = True
+
+        return changed
+
+    @staticmethod
     def _mark_plan_failed(plan: Optional[TaskPlan]) -> bool:
         if not plan:
             return False
@@ -279,63 +342,12 @@ class AgentEngine:
         return False
 
     def _build_messages(self, conversation: Conversation) -> List[Dict[str, Any]]:
-        """构建发送给 LLM 的消息列表（带基础上下文压缩）"""
-        messages: List[Dict[str, Any]] = []
-        all_msgs = conversation.messages
-        sliced = all_msgs[-MAX_CONTEXT_MESSAGES:] if len(all_msgs) > MAX_CONTEXT_MESSAGES else all_msgs
-
-        omitted = len(all_msgs) - len(sliced)
-        if omitted > 0:
-            messages.append({
-                "role": "system",
-                "content": f"上下文已压缩：省略了更早的 {omitted} 条消息，请聚焦当前任务。",
-            })
-
-        recent_start = max(0, len(sliced) - 12)
-        for idx, msg in enumerate(sliced):
-            limit = MAX_RECENT_MESSAGE_CHARS if idx >= recent_start else MAX_OLD_MESSAGE_CHARS
-
-            if msg.role == MessageRole.USER:
-                messages.append({"role": "user", "content": self._clip_text(msg.content, limit)})
-
-            elif msg.role == MessageRole.ASSISTANT:
-                entry: Dict[str, Any] = {"role": "assistant"}
-                if msg.content:
-                    entry["content"] = self._clip_text(msg.content, limit)
-                if msg.tool_calls:
-                    entry["tool_calls"] = [
-                        {
-                            "id": tc.id,
-                            "type": "function",
-                            "function": {
-                                "name": tc.name,
-                                "arguments": json.dumps(tc.arguments, ensure_ascii=False),
-                            }
-                        }
-                        for tc in msg.tool_calls
-                    ]
-                    if not entry.get("content"):
-                        entry["content"] = ""
-                messages.append(entry)
-
-            elif msg.role == MessageRole.TOOL:
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": msg.tool_calls[0].id if msg.tool_calls else "",
-                    "content": self._clip_text(msg.content, limit),
-                })
-
-        if conversation.plan:
-            plan_markdown = self._clip_text(self._plan_to_markdown(conversation.plan), 3000)
-            messages.append({
-                "role": "system",
-                "content": (
-                    "你必须严格对齐当前任务计划（todo.md）执行，优先推进当前阶段：\n"
-                    f"{plan_markdown}"
-                ),
-            })
-
-        return messages
+        """构建发送给 LLM 的消息列表（带可恢复压缩）"""
+        plan_markdown = self._plan_to_markdown(conversation.plan) if conversation.plan else None
+        return self._context_manager.build_messages(
+            conversation=conversation,
+            plan_markdown=plan_markdown,
+        )
 
     @staticmethod
     def _is_tool_blocked_by_takeover(tool_name: str, target: str) -> bool:
@@ -350,17 +362,18 @@ class AgentEngine:
 
     def _get_allowed_tools(self, conversation: Conversation) -> List[str]:
         allowed = list(DEFAULT_TOOL_NAMES)
-        if not conversation.manual_takeover_enabled:
-            return allowed
+        if conversation.manual_takeover_enabled:
+            target = (conversation.manual_takeover_target or "all").strip().lower()
+            if target == "all":
+                return []
+            if target == "terminal":
+                allowed = [t for t in allowed if t not in {"shell_exec", "execute_code"}]
+            elif target == "browser":
+                allowed = [t for t in allowed if not t.startswith("browser_")]
+            else:
+                return []
 
-        target = (conversation.manual_takeover_target or "all").strip().lower()
-        if target == "all":
-            return []
-        if target == "terminal":
-            return [t for t in allowed if t not in {"shell_exec", "execute_code"}]
-        if target == "browser":
-            return [t for t in allowed if not t.startswith("browser_")]
-        return []
+        return self._tool_state_machine.get_allowed_tools(conversation, allowed)
 
     async def run_agent_loop(
         self,
@@ -439,14 +452,71 @@ class AgentEngine:
             # 调用 LLM（根据当前状态动态约束可用工具）
             messages = self._build_messages(conversation)
             allowed_tools = self._get_allowed_tools(conversation)
-            llm_result = await chat_completion(
-                messages,
-                use_tools=bool(allowed_tools),
-                allowed_tool_names=allowed_tools if allowed_tools else None,
-            )
+            content = ""
+            tool_calls_data: List[Dict[str, Any]] = []
+            content_streamed = False
+            stream_error: Optional[str] = None
 
-            content = llm_result.get("content", "")
-            tool_calls_data = llm_result.get("tool_calls", [])
+            try:
+                async for chunk in chat_completion_stream(
+                    messages,
+                    use_tools=bool(allowed_tools),
+                    allowed_tool_names=allowed_tools if allowed_tools else None,
+                ):
+                    chunk_type = chunk.get("type", "")
+
+                    if chunk_type == "content":
+                        delta = chunk.get("data", "")
+                        if not isinstance(delta, str) or not delta:
+                            continue
+                        content += delta
+                        content_streamed = True
+                        yield {
+                            "event": SSEEventType.CONTENT,
+                            "data": json.dumps({
+                                "content": delta,
+                                "type": "intermediate",
+                            }, ensure_ascii=False)
+                        }
+                        continue
+
+                    if chunk_type == "tool_call":
+                        tc_payload = chunk.get("data")
+                        if isinstance(tc_payload, dict):
+                            tool_calls_data.append(tc_payload)
+                        continue
+
+                    if chunk_type == "done":
+                        done_payload = chunk.get("data")
+                        if not isinstance(done_payload, dict):
+                            continue
+                        done_content = done_payload.get("content", "")
+                        if isinstance(done_content, str):
+                            content = done_content
+                        done_tool_calls = done_payload.get("tool_calls", [])
+                        if isinstance(done_tool_calls, list):
+                            tool_calls_data = done_tool_calls
+                        continue
+
+                    if chunk_type == "error":
+                        stream_error = str(chunk.get("data", "unknown stream error"))
+                        break
+            except Exception as exc:
+                stream_error = str(exc)
+
+            # 流式失败时兜底到非流式，避免整轮直接失败。
+            if stream_error and not content_streamed and not tool_calls_data:
+                logger.warning("LLM stream failed, fallback to non-stream completion: %s", stream_error)
+                llm_result = await chat_completion(
+                    messages,
+                    use_tools=bool(allowed_tools),
+                    allowed_tool_names=allowed_tools if allowed_tools else None,
+                )
+                content = llm_result.get("content", "")
+                tool_calls_data = llm_result.get("tool_calls", [])
+                content_streamed = False
+            elif stream_error and not content and not tool_calls_data:
+                content = f"调用 LLM 时出错: {stream_error}"
 
             if not tool_calls_data:
                 # 没有工具调用，直接输出文本内容
@@ -456,6 +526,17 @@ class AgentEngine:
                         content=content
                     )
                     conversation.messages.append(assistant_msg)
+
+                    finalizing_changed = self._transition_plan_to_finalizing(conversation.plan)
+                    if finalizing_changed and conversation.plan:
+                        self._save_conversations()
+                        yield {
+                            "event": SSEEventType.PLAN_UPDATE,
+                            "data": json.dumps(
+                                self._build_plan_update_payload(conversation, reason="finalizing"),
+                                ensure_ascii=False,
+                            ),
+                        }
 
                     plan_changed = self._mark_plan_completed(conversation.plan)
                     conversation.limit_reached = False
@@ -528,8 +609,8 @@ class AgentEngine:
             conversation.messages.append(assistant_msg)
             self._save_conversations()
 
-            # 如果有文本内容，先输出
-            if content:
+            # 如果有文本内容且未在流式阶段输出，则补发一次
+            if content and not content_streamed:
                 yield {
                     "event": SSEEventType.CONTENT,
                     "data": json.dumps({

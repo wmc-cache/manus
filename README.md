@@ -49,7 +49,7 @@
 1. 用户输入消息
 2. Agent 分析任务，决定是否需要调用工具
 3. 如需工具：调用工具 → 获取结果 → 反馈给 LLM → 继续推理
-4. 循环直到 LLM 给出最终回答（最多 10 轮迭代）
+4. 循环直到 LLM 给出最终回答（默认最多 30 轮迭代，可配置）
 5. 全程通过 SSE 实时推送状态给前端
 
 ## 快速开始
@@ -94,6 +94,7 @@ pnpm dev
 | `content` | 文本内容输出 |
 | `tool_call` | 工具调用开始 |
 | `tool_result` | 工具调用结果 |
+| `plan_update` | 任务计划状态更新 |
 | `done` | 完成 |
 | `error` | 错误 |
 
@@ -105,6 +106,7 @@ manus-mvp/
 │   ├── main.py              # FastAPI 入口
 │   ├── agent/
 │   │   ├── core.py          # Agent 核心引擎
+│   │   ├── context_manager.py # 上下文压缩/外置记忆与工具状态机
 │   │   └── tools.py         # 工具定义与执行
 │   ├── llm/
 │   │   └── deepseek.py      # DeepSeek API 封装
@@ -135,6 +137,16 @@ manus-mvp/
 | `MANUS_API_TOKEN` | 后端 API 鉴权令牌（启用后 HTTP/WS 需携带） | 否 |
 | `VITE_MANUS_API_TOKEN` | 前端请求时附带的鉴权令牌（应与 `MANUS_API_TOKEN` 一致） | 否 |
 | `MANUS_SANDBOX_INHERIT_ENV` | 是否让工具子进程继承全部环境变量（默认否，仅保留安全变量） | 否 |
+| `MANUS_MAX_ITERATIONS` | Agent 单次执行最大轮数（默认 30） | 否 |
+| `MANUS_CONVERSATIONS_FILE` | 会话持久化文件路径（默认 `/tmp/manus_workspace/conversations.json`） | 否 |
+| `MANUS_MAX_CONTEXT_MESSAGES` | 发送给 LLM 的最大历史消息条数（默认 40） | 否 |
+| `MANUS_MAX_RECENT_MESSAGE_CHARS` | 最近消息的单条最大字符数（默认 4000） | 否 |
+| `MANUS_MAX_OLD_MESSAGE_CHARS` | 较早消息的单条最大字符数（默认 1200） | 否 |
+| `MANUS_CONTEXT_PLAN_MAX_CHARS` | 注入上下文的计划文本最大字符数（默认 3000） | 否 |
+| `MANUS_CONTEXT_EXTERNALIZE_THRESHOLD` | 工具输出触发外置存储的阈值（默认 1000） | 否 |
+| `MANUS_CONTEXT_MESSAGE_EXTERNALIZE_THRESHOLD` | 历史 user/assistant 文本触发外置存储的阈值（默认 6000） | 否 |
+| `MANUS_CONTEXT_SUMMARY_CHARS` | 工具输出外置后摘要字符数（默认 600） | 否 |
+| `MANUS_ENABLE_TOOL_STATE_MACHINE` | 是否启用按阶段收敛工具集合（默认开启） | 否 |
 | `MANUS_WIDE_RESEARCH_MAX_ITEMS` | `wide_research` 单次最大条目数（默认 20） | 否 |
 | `MANUS_WIDE_RESEARCH_CONCURRENCY` | `wide_research` 并发度（默认 5） | 否 |
 
