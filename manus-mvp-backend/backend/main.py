@@ -137,6 +137,8 @@ async def list_conversations():
             "created_at": conv.created_at.isoformat(),
             "manual_takeover_enabled": conv.manual_takeover_enabled,
             "manual_takeover_target": conv.manual_takeover_target,
+            "limit_reached": conv.limit_reached,
+            "continue_message": conv.continue_message,
             "plan_goal": conv.plan.goal if conv.plan else None,
             "plan_current_phase_id": running_phase,
         })
@@ -175,6 +177,8 @@ async def get_conversation(conversation_id: str):
         "id": conv.id,
         "title": conv.title,
         "messages": messages,
+        "limit_reached": conv.limit_reached,
+        "continue_message": conv.continue_message,
         "plan": conv.plan.model_dump(mode="json") if conv.plan else None,
         "created_at": conv.created_at.isoformat(),
         "manual_takeover_enabled": conv.manual_takeover_enabled,

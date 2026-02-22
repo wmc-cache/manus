@@ -65,7 +65,45 @@ def _to_workspace_relpath(path: str, workspace: str) -> str:
 
 
 # ============ 工具：网页搜索（Tavily API）============
-TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY", "")
+def _read_env_key_from_file(path: Path, key: str) -> str:
+    if not path.exists():
+        return ""
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            if k.strip() != key:
+                continue
+            value = v.strip().strip('"').strip("'")
+            if value:
+                return value
+    except Exception:
+        return ""
+    return ""
+
+
+def _resolve_tavily_api_key() -> str:
+    # 优先显式环境变量
+    env_key = os.environ.get("TAVILY_API_KEY", "").strip()
+    if env_key:
+        return env_key
+
+    # 其次读取后端 .env
+    backend_env = Path(__file__).resolve().parents[1] / ".env"
+    file_key = _read_env_key_from_file(backend_env, "TAVILY_API_KEY")
+    if file_key:
+        return file_key
+
+    # 最后兼容前端 .env（与 DEEPSEEK 读取策略一致）
+    frontend_env = Path(__file__).resolve().parents[3] / "manus-frontend" / ".env"
+    return _read_env_key_from_file(frontend_env, "TAVILY_API_KEY")
+
+
+TAVILY_API_KEY = _resolve_tavily_api_key()
 SAFE_ENV_KEYS = {
     "PATH",
     "LANG",

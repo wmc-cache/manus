@@ -68,6 +68,8 @@ class Conversation(BaseModel):
     plan: Optional[TaskPlan] = None
     manual_takeover_enabled: bool = False
     manual_takeover_target: str = "all"
+    limit_reached: bool = False
+    continue_message: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.now)
 
 

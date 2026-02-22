@@ -365,6 +365,9 @@ class AgentEngine:
         # 添加用户消息
         user_msg = Message(role=MessageRole.USER, content=user_message)
         conversation.messages.append(user_msg)
+        # 进入新一轮执行时，先清除“可继续”标记
+        conversation.limit_reached = False
+        conversation.continue_message = None
 
         # 更新计划（初始化或恢复）
         plan_reason = self._ensure_plan_for_turn(conversation, user_message)
@@ -436,6 +439,8 @@ class AgentEngine:
                     conversation.messages.append(assistant_msg)
 
                     plan_changed = self._mark_plan_completed(conversation.plan)
+                    conversation.limit_reached = False
+                    conversation.continue_message = None
                     self._save_conversations()
 
                     if plan_changed and conversation.plan:
@@ -641,6 +646,8 @@ class AgentEngine:
                         content=manual_blocked_notice
                     )
                 )
+                conversation.limit_reached = False
+                conversation.continue_message = None
                 self._save_conversations()
                 yield {
                     "event": SSEEventType.CONTENT,
@@ -680,6 +687,8 @@ class AgentEngine:
                     )
                 )
                 plan_failed = self._mark_plan_failed(conversation.plan)
+                conversation.limit_reached = False
+                conversation.continue_message = None
                 self._save_conversations()
                 if plan_failed and conversation.plan:
                     yield {
@@ -710,6 +719,8 @@ class AgentEngine:
                     content=limit_notice
                 )
             )
+            conversation.limit_reached = True
+            conversation.continue_message = limit_notice
             self._save_conversations()
             if conversation.plan:
                 yield {

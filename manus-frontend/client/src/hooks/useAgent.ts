@@ -55,6 +55,8 @@ interface ConversationDetailResponse {
       status?: ToolCall["status"];
     }>;
   }>;
+  limit_reached?: boolean;
+  continue_message?: string | null;
   created_at: string;
 }
 
@@ -88,6 +90,27 @@ function normalizeMessage(item: ConversationDetailMessage): Message {
       status: tc.status || "completed",
     })),
     timestamp: item?.timestamp || new Date().toISOString(),
+  };
+}
+
+function inferContinueStateFromMessages(messages: Message[]): {
+  limitReached: boolean;
+  continueMessage: string | null;
+} {
+  const hint = "已达到单次最大调用轮数";
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const msg = messages[i];
+    if (msg.role !== "assistant" || !msg.content) continue;
+    if (msg.content.includes(hint)) {
+      return {
+        limitReached: true,
+        continueMessage: msg.content,
+      };
+    }
+  }
+  return {
+    limitReached: false,
+    continueMessage: null,
   };
 }
 
@@ -139,6 +162,20 @@ export function useAgent() {
       const messages = (data.messages || [])
         .filter((msg) => msg.role !== "tool")
         .map(normalizeMessage);
+      const inferred = inferContinueStateFromMessages(messages);
+      const backendLimitReached = Boolean(data.limit_reached);
+      const backendContinueMessage =
+        typeof data.continue_message === "string" && data.continue_message.trim()
+          ? data.continue_message
+          : null;
+      const limitReached = backendLimitReached || inferred.limitReached;
+      const continueMessage = limitReached
+        ? (
+            backendContinueMessage
+            || inferred.continueMessage
+            || "已达到单次最大调用轮数。点击“继续”可接着执行。"
+          )
+        : null;
 
       setState((prev) => ({
         ...prev,
@@ -149,8 +186,8 @@ export function useAgent() {
         currentToolCall: null,
         error: null,
         iteration: 0,
-        limitReached: false,
-        continueMessage: null,
+        limitReached,
+        continueMessage,
       }));
 
       return true;
