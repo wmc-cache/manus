@@ -209,6 +209,10 @@ async def chat(request: ChatRequest):
                     user_message=request.message,
                     conversation_id=conversation.id,
                     record_user_message=not is_control_continue,
+                    deep_research_enabled=bool(request.deep_research_enabled),
+                    deep_research_max_concurrency=request.deep_research_max_concurrency,
+                    deep_research_max_items=request.deep_research_max_items,
+                    deep_research_max_iterations=request.deep_research_max_iterations,
                 ):
                     yield {
                         "event": event["event"].value if hasattr(event["event"], 'value') else event["event"],

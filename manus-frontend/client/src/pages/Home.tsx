@@ -20,7 +20,7 @@ import MessageBubble from "@/components/MessageBubble";
 import ThinkingIndicator from "@/components/ThinkingIndicator";
 import ChatInput from "@/components/ChatInput";
 import ComputerPanel from "@/components/sandbox/ComputerPanel";
-import type { SubAgentSessionDetailData } from "@/types";
+import type { DeepResearchSettingsData, SubAgentSessionDetailData } from "@/types";
 import { toast } from "sonner";
 
 const PLAN_STATUS_LABEL: Record<string, string> = {
@@ -37,6 +37,35 @@ const SUB_AGENT_STATUS_LABEL: Record<string, string> = {
   failed: "失败",
   max_iterations: "达上限",
 };
+
+const DEEP_RESEARCH_SETTINGS_KEY = "manus.deep_research.settings";
+const DEFAULT_DEEP_RESEARCH_SETTINGS: DeepResearchSettingsData = {
+  enabledByDefault: false,
+  maxConcurrency: 3,
+  maxItems: 20,
+  maxIterations: 4,
+};
+
+function clampInt(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(max, Math.max(min, Math.round(value)));
+}
+
+function loadDeepResearchSettings(): DeepResearchSettingsData {
+  try {
+    const raw = window.localStorage.getItem(DEEP_RESEARCH_SETTINGS_KEY);
+    if (!raw) return DEFAULT_DEEP_RESEARCH_SETTINGS;
+    const parsed = JSON.parse(raw) as Partial<DeepResearchSettingsData>;
+    return {
+      enabledByDefault: Boolean(parsed.enabledByDefault),
+      maxConcurrency: clampInt(Number(parsed.maxConcurrency), 1, 20),
+      maxItems: clampInt(Number(parsed.maxItems), 1, 100),
+      maxIterations: clampInt(Number(parsed.maxIterations), 1, 12),
+    };
+  } catch {
+    return DEFAULT_DEEP_RESEARCH_SETTINGS;
+  }
+}
 
 const HERO_BG =
   "https://private-us-east-1.manuscdn.com/sessionFile/wYRFO7o4twJWKVfWlISpqY/sandbox/drOIOkPpOFG7RUVTquZoNi-img-1_1771589325000_na1fn_aGVyby1iZw.png?x-oss-process=image/resize,w_1920,h_1920/format,webp/quality,q_80&Expires=1798761600&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly9wcml2YXRlLXVzLWVhc3QtMS5tYW51c2Nkbi5jb20vc2Vzc2lvbkZpbGUvd1lSRk83bzR0d0pXS1ZmV2xJU3BxWS9zYW5kYm94L2RyT0lPa1BwT0ZHN1JVVlRxdVpvTmktaW1nLTFfMTc3MTU4OTMyNTAwMF9uYTFmbl9hR1Z5YnkxaVp3LnBuZz94LW9zcy1wcm9jZXNzPWltYWdlL3Jlc2l6ZSx3XzE5MjAsaF8xOTIwL2Zvcm1hdCx3ZWJwL3F1YWxpdHkscV84MCIsIkNvbmRpdGlvbiI6eyJEYXRlTGVzc1RoYW4iOnsiQVdTOkVwb2NoVGltZSI6MTc5ODc2MTYwMH19fV19&Key-Pair-Id=K2HSFNDJXOU9YS&Signature=bLV0gYsEmcPgJBG-cXYD2csT3PZ-duS39GcAI3N41yZoT3xOBgXHuzp2BCO2vC8YHdisx~Z11Ihq5Y6e51f2wUIpYhtvEG73mP92xhMxX85lMa~73jqZiqTwagT3gOc2iEtU9l9vbUfrNNWZcgt6KesNAhYIaKGk0dxlEkS4ZnSqHeM~sPF~KntQvY3rprWr51kL-qPnqXn1rWgCbYkgU0tdhSN0oFu2HBnygMIGWtPpmfj5l0Ts0WrD~UmBURNrVIYw8ECC-WRACa84M3G75csooYLAW5F8JpRviklNLneu9iW3oLUUUbQcJqKM57E08UicyQ~SoeVTkaUZGSxIUg__";
@@ -70,6 +99,7 @@ export default function Home() {
 
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [computerOpen, setComputerOpen] = useState(true);
+  const [deepResearchSettings, setDeepResearchSettings] = useState<DeepResearchSettingsData>(DEFAULT_DEEP_RESEARCH_SETTINGS);
   const [subAgentDialogOpen, setSubAgentDialogOpen] = useState(false);
   const [subAgentSessionLoading, setSubAgentSessionLoading] = useState(false);
   const [subAgentSessionError, setSubAgentSessionError] = useState<string | null>(null);
@@ -82,6 +112,18 @@ export default function Home() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isThinking]);
+
+  useEffect(() => {
+    setDeepResearchSettings(loadDeepResearchSettings());
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(DEEP_RESEARCH_SETTINGS_KEY, JSON.stringify(deepResearchSettings));
+    } catch {
+      // ignore storage failures
+    }
+  }, [deepResearchSettings]);
 
   // 当 Agent 开始工作时自动打开计算机窗口
   useEffect(() => {
@@ -112,11 +154,26 @@ export default function Home() {
     prevConvIdRef.current = null;
   }, [clearMessages, sandbox.switchConversation]);
 
+  const handleSendMessage = useCallback((text: string, options?: { deepResearch?: boolean }) => {
+    if (options?.deepResearch) {
+      sendMessage(text, {
+        deepResearch: {
+          enabled: true,
+          maxConcurrency: deepResearchSettings.maxConcurrency,
+          maxItems: deepResearchSettings.maxItems,
+          maxIterations: deepResearchSettings.maxIterations,
+        },
+      });
+      return;
+    }
+    sendMessage(text);
+  }, [deepResearchSettings, sendMessage]);
+
   const handleSuggestionClick = useCallback(
     (text: string) => {
-      sendMessage(text);
+      handleSendMessage(text, { deepResearch: deepResearchSettings.enabledByDefault });
     },
-    [sendMessage]
+    [deepResearchSettings.enabledByDefault, handleSendMessage]
   );
 
   const handleSelectConversation = useCallback(
@@ -145,6 +202,15 @@ export default function Home() {
     },
     [conversations, deleteConversation]
   );
+
+  const handleDeepResearchSettingsChange = useCallback((next: DeepResearchSettingsData) => {
+    setDeepResearchSettings({
+      enabledByDefault: Boolean(next.enabledByDefault),
+      maxConcurrency: clampInt(next.maxConcurrency, 1, 20),
+      maxItems: clampInt(next.maxItems, 1, 100),
+      maxIterations: clampInt(next.maxIterations, 1, 12),
+    });
+  }, []);
 
   const handleOpenSubAgentSession = useCallback(async (sessionId: string) => {
     if (!conversationId || !sessionId) return;
@@ -191,6 +257,8 @@ export default function Home() {
               activeConversationId={conversationId}
               onSelectConversation={handleSelectConversation}
               onDeleteConversation={handleDeleteConversation}
+              deepResearchSettings={deepResearchSettings}
+              onDeepResearchSettingsChange={handleDeepResearchSettingsChange}
             />
           )}
         </AnimatePresence>
@@ -315,6 +383,11 @@ export default function Home() {
                         reduce: {subAgentIndex.reduce_goal}
                       </p>
                     )}
+                    {subAgentIndex.limits && (
+                      <p className="mt-1 text-[11px] text-muted-foreground/80">
+                        limits: c={subAgentIndex.limits.max_concurrency ?? "-"}, items={subAgentIndex.limits.max_items ?? "-"}, iter={subAgentIndex.limits.max_iterations ?? "-"}
+                      </p>
+                    )}
                     <div className="mt-2 space-y-1">
                       {subAgentIndex.sub_sessions.map((session) => {
                         const status = SUB_AGENT_STATUS_LABEL[session.status] || session.status;
@@ -396,12 +469,13 @@ export default function Home() {
             </div>
           )}
           <ChatInput
-            onSend={sendMessage}
+            onSend={handleSendMessage}
             onContinue={continueAgent}
             onStop={stopAgent}
             isLoading={isLoading}
             showContinue={limitReached}
             continueLabel="继续"
+            defaultDeepResearchEnabled={deepResearchSettings.enabledByDefault}
           />
 
           <Dialog

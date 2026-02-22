@@ -118,6 +118,11 @@ export interface SubAgentIndexData {
   created_at: string;
   task_template?: string;
   reduce_goal?: string;
+  limits?: {
+    max_concurrency?: number;
+    max_items?: number;
+    max_iterations?: number;
+  };
   sub_sessions: SubAgentSessionRefData[];
   reduce_summary_path?: string;
   reduce_results_path?: string;
@@ -163,6 +168,13 @@ export interface SubAgentSessionDetailData {
   messages: SubAgentMessageData[];
   created_at: string;
   error?: string;
+}
+
+export interface DeepResearchSettingsData {
+  enabledByDefault: boolean;
+  maxConcurrency: number;
+  maxItems: number;
+  maxIterations: number;
 }
 
 // ============ 工具名称映射 ============

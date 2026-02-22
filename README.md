@@ -45,6 +45,11 @@
 | `read_file` | 读取文件 | 读取指定路径的文件内容 |
 | `write_file` | 写入文件 | 创建或写入文件 |
 
+### 深度研究模式（前端）
+
+- 输入框支持“深度研究（自动启用子代理并行）”勾选
+- 侧边栏“设置”可配置默认开关与子代理并行参数（并发数、最大条目数、单代理最大迭代）
+
 ### Agent Loop 工作流程
 
 1. 用户输入消息
@@ -154,6 +159,9 @@ manus-mvp/
 | `MANUS_SUBAGENT_MAX_ITEMS` | `spawn_sub_agents` 单次最大子代理数（默认 20） | 否 |
 | `MANUS_SUBAGENT_CONCURRENCY` | `spawn_sub_agents` 并发度（默认 5） | 否 |
 | `MANUS_SUBAGENT_MAX_ITERATIONS` | `spawn_sub_agents` 内部每个子代理最大循环轮数（默认 4） | 否 |
+| `MANUS_SUBAGENT_MAX_ITEMS_HARD` | `spawn_sub_agents` 运行时可覆盖的硬上限（默认 100） | 否 |
+| `MANUS_SUBAGENT_CONCURRENCY_HARD` | `spawn_sub_agents` 并发硬上限（默认 20） | 否 |
+| `MANUS_SUBAGENT_MAX_ITERATIONS_HARD` | `spawn_sub_agents` 单代理迭代硬上限（默认 12） | 否 |
 
 ## License
 

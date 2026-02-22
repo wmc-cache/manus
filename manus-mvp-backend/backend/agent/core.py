@@ -388,11 +388,52 @@ class AgentEngine:
 
         return self._tool_state_machine.get_allowed_tools(conversation, allowed)
 
+    @staticmethod
+    def _clamp_positive_int(value: Optional[int], default: int, low: int, high: int) -> int:
+        base = default
+        if isinstance(value, int):
+            base = value
+        if base < low:
+            base = low
+        if base > high:
+            base = high
+        return base
+
+    def _build_deep_research_instruction(
+        self,
+        *,
+        user_message: str,
+        enabled: bool,
+        max_concurrency: Optional[int],
+        max_items: Optional[int],
+        max_iterations: Optional[int],
+    ) -> Optional[str]:
+        if not enabled:
+            return None
+        if self._is_continue_message(user_message):
+            return None
+
+        concurrency = self._clamp_positive_int(max_concurrency, default=3, low=1, high=20)
+        items = self._clamp_positive_int(max_items, default=20, low=1, high=100)
+        iterations = self._clamp_positive_int(max_iterations, default=4, low=1, high=12)
+
+        return (
+            "【运行模式】深度研究（子代理并行）已开启。\n"
+            "请优先调用 spawn_sub_agents 工具，不要改用 wide_research。\n"
+            "你需要从用户请求中提炼 task_template、items、reduce_goal，并立即发起并行。\n"
+            f"调用 spawn_sub_agents 时请显式传入: max_concurrency={concurrency}, max_items={items}, max_iterations={iterations}。\n"
+            "完成后读取 multi_agent/reduce_summary.md 并给出最终结论。"
+        )
+
     async def run_agent_loop(
         self,
         user_message: str,
         conversation_id: Optional[str] = None,
         record_user_message: bool = True,
+        deep_research_enabled: bool = False,
+        deep_research_max_concurrency: Optional[int] = None,
+        deep_research_max_items: Optional[int] = None,
+        deep_research_max_iterations: Optional[int] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
         运行 Agent 循环，通过 SSE 事件流返回结果。
@@ -450,6 +491,13 @@ class AgentEngine:
         last_invalid_tool_name = ""
         last_invalid_reason = ""
         manual_blocked_notice = ""
+        deep_research_instruction = self._build_deep_research_instruction(
+            user_message=user_message,
+            enabled=deep_research_enabled,
+            max_concurrency=deep_research_max_concurrency,
+            max_items=deep_research_max_items,
+            max_iterations=deep_research_max_iterations,
+        )
         while iteration < MAX_ITERATIONS:
             iteration += 1
 
@@ -464,6 +512,11 @@ class AgentEngine:
 
             # 调用 LLM（根据当前状态动态约束可用工具）
             messages = self._build_messages(conversation)
+            if deep_research_instruction:
+                messages = messages + [{
+                    "role": "user",
+                    "content": deep_research_instruction,
+                }]
             allowed_tools = self._get_allowed_tools(conversation)
             content = ""
             tool_calls_data: List[Dict[str, Any]] = []

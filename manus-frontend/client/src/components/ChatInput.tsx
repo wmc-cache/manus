@@ -2,19 +2,21 @@
  * ChatInput - 消息输入组件
  * 设计风格: 毛玻璃底部栏，自动增长的 textarea
  */
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { motion } from "framer-motion";
 import { Send, Square, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 
 interface ChatInputProps {
-  onSend: (message: string) => void;
+  onSend: (message: string, options?: { deepResearch?: boolean }) => void;
   onStop: () => void;
   onContinue?: () => void;
   isLoading: boolean;
   disabled?: boolean;
   showContinue?: boolean;
   continueLabel?: string;
+  defaultDeepResearchEnabled?: boolean;
 }
 
 export default function ChatInput({
@@ -25,19 +27,25 @@ export default function ChatInput({
   disabled,
   showContinue,
   continueLabel = "继续",
+  defaultDeepResearchEnabled = false,
 }: ChatInputProps) {
   const [input, setInput] = useState("");
+  const [deepResearch, setDeepResearch] = useState(defaultDeepResearchEnabled);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    setDeepResearch(defaultDeepResearchEnabled);
+  }, [defaultDeepResearchEnabled]);
 
   const handleSubmit = useCallback(() => {
     const trimmed = input.trim();
     if (!trimmed || isLoading) return;
-    onSend(trimmed);
+    onSend(trimmed, { deepResearch });
     setInput("");
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
     }
-  }, [input, isLoading, onSend]);
+  }, [deepResearch, input, isLoading, onSend]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -113,6 +121,17 @@ export default function ChatInput({
           </div>
         )}
       </motion.div>
+
+      <div className="max-w-3xl mx-auto mt-2 px-2 flex items-center justify-between">
+        <label className="inline-flex items-center gap-2 text-xs text-muted-foreground select-none">
+          <Switch
+            checked={deepResearch}
+            onCheckedChange={setDeepResearch}
+            disabled={isLoading || disabled}
+          />
+          深度研究（自动启用子代理并行）
+        </label>
+      </div>
 
       <p className="text-center text-xs text-muted-foreground/40 mt-2">
         Manus MVP · Powered by DeepSeek

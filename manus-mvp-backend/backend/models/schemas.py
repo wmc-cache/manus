@@ -31,6 +31,10 @@ class ChatRequest(BaseModel):
     message: str
     conversation_id: Optional[str] = None
     control_continue: bool = False
+    deep_research_enabled: bool = False
+    deep_research_max_concurrency: Optional[int] = None
+    deep_research_max_items: Optional[int] = None
+    deep_research_max_iterations: Optional[int] = None
 
 
 class ToolCall(BaseModel):

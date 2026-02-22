@@ -172,6 +172,18 @@ TOOLS = [
                     "reduce_goal": {
                         "type": "string",
                         "description": "可选，reduce 阶段的汇总目标说明"
+                    },
+                    "max_concurrency": {
+                        "type": "integer",
+                        "description": "可选，子代理并发数（正整数）"
+                    },
+                    "max_items": {
+                        "type": "integer",
+                        "description": "可选，本次最多处理条目数（正整数）"
+                    },
+                    "max_iterations": {
+                        "type": "integer",
+                        "description": "可选，单个子代理最大循环轮数（正整数）"
                     }
                 },
                 "required": ["task_template", "items"]

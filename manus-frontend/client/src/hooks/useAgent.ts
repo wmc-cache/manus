@@ -120,6 +120,12 @@ interface SendMessageOptions {
   silentUserMessage?: boolean;
   conversationIdOverride?: string | null;
   controlContinue?: boolean;
+  deepResearch?: {
+    enabled: boolean;
+    maxConcurrency: number;
+    maxItems: number;
+    maxIterations: number;
+  };
 }
 
 interface ConversationListResponse {
@@ -286,6 +292,13 @@ function normalizeSubAgentIndex(raw: unknown): SubAgentIndexData | null {
     created_at: index.created_at,
     task_template: typeof index.task_template === "string" ? index.task_template : undefined,
     reduce_goal: typeof index.reduce_goal === "string" ? index.reduce_goal : undefined,
+    limits: index.limits && typeof index.limits === "object"
+      ? {
+          max_concurrency: typeof index.limits.max_concurrency === "number" ? index.limits.max_concurrency : undefined,
+          max_items: typeof index.limits.max_items === "number" ? index.limits.max_items : undefined,
+          max_iterations: typeof index.limits.max_iterations === "number" ? index.limits.max_iterations : undefined,
+        }
+      : undefined,
     sub_sessions: subSessions,
     reduce_summary_path: typeof index.reduce_summary_path === "string" ? index.reduce_summary_path : undefined,
     reduce_results_path: typeof index.reduce_results_path === "string" ? index.reduce_results_path : undefined,
@@ -575,6 +588,10 @@ export function useAgent() {
           message,
           conversation_id: effectiveConversationId,
           control_continue: controlContinue,
+          deep_research_enabled: Boolean(options?.deepResearch?.enabled),
+          deep_research_max_concurrency: options?.deepResearch?.enabled ? options.deepResearch.maxConcurrency : undefined,
+          deep_research_max_items: options?.deepResearch?.enabled ? options.deepResearch.maxItems : undefined,
+          deep_research_max_iterations: options?.deepResearch?.enabled ? options.deepResearch.maxIterations : undefined,
         }),
         signal: abortControllerRef.current.signal,
       });
@@ -801,6 +818,7 @@ export function useAgent() {
         ...prev,
         isLoading: false,
         isThinking: false,
+        thinkingStatus: null,
         error: err instanceof Error ? err.message : "连接失败",
       }));
     }

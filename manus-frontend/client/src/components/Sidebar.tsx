@@ -2,6 +2,7 @@
  * Sidebar - 对话列表侧边栏
  * 设计风格: 深色毛玻璃侧边栏
  */
+import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import {
   Plus,
@@ -11,7 +12,10 @@ import {
   Zap,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { Conversation } from "@/types";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
+import type { Conversation, DeepResearchSettingsData } from "@/types";
 import { toast } from "sonner";
 
 interface SidebarProps {
@@ -20,6 +24,8 @@ interface SidebarProps {
   activeConversationId: string | null;
   onSelectConversation?: (id: string) => void;
   onDeleteConversation?: (id: string) => void;
+  deepResearchSettings: DeepResearchSettingsData;
+  onDeepResearchSettingsChange: (next: DeepResearchSettingsData) => void;
   isCollapsed?: boolean;
 }
 
@@ -34,14 +40,47 @@ function formatConversationMeta(conv: Conversation): string {
   return `${count} 条消息 · ${hh}:${mm}`;
 }
 
+function clampInt(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(max, Math.max(min, Math.round(value)));
+}
+
 export default function Sidebar({
   onNewChat,
   conversations,
   activeConversationId,
   onSelectConversation,
   onDeleteConversation,
+  deepResearchSettings,
+  onDeepResearchSettingsChange,
   isCollapsed,
 }: SidebarProps) {
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [draftEnabledByDefault, setDraftEnabledByDefault] = useState(deepResearchSettings.enabledByDefault);
+  const [draftConcurrency, setDraftConcurrency] = useState(String(deepResearchSettings.maxConcurrency));
+  const [draftMaxItems, setDraftMaxItems] = useState(String(deepResearchSettings.maxItems));
+  const [draftMaxIterations, setDraftMaxIterations] = useState(String(deepResearchSettings.maxIterations));
+
+  useEffect(() => {
+    if (settingsOpen) return;
+    setDraftEnabledByDefault(deepResearchSettings.enabledByDefault);
+    setDraftConcurrency(String(deepResearchSettings.maxConcurrency));
+    setDraftMaxItems(String(deepResearchSettings.maxItems));
+    setDraftMaxIterations(String(deepResearchSettings.maxIterations));
+  }, [deepResearchSettings, settingsOpen]);
+
+  const handleSaveSettings = () => {
+    const next: DeepResearchSettingsData = {
+      enabledByDefault: draftEnabledByDefault,
+      maxConcurrency: clampInt(Number(draftConcurrency), 1, 20),
+      maxItems: clampInt(Number(draftMaxItems), 1, 100),
+      maxIterations: clampInt(Number(draftMaxIterations), 1, 12),
+    };
+    onDeepResearchSettingsChange(next);
+    setSettingsOpen(false);
+    toast("深度研究设置已保存");
+  };
+
   if (isCollapsed) return null;
 
   return (
@@ -138,13 +177,79 @@ export default function Sidebar({
       {/* 底部设置 */}
       <div className="p-3 border-t border-border/30">
         <button
-          onClick={() => toast("设置功能即将上线", { description: "Feature coming soon" })}
+          onClick={() => setSettingsOpen(true)}
           className="flex items-center gap-2 px-2 py-2 rounded-lg text-sm text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors w-full"
         >
           <Settings className="w-4 h-4" />
           <span>设置</span>
         </button>
       </div>
+
+      <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+        <DialogContent className="max-w-md bg-background/95 border-border/50">
+          <DialogHeader>
+            <DialogTitle>深度研究设置</DialogTitle>
+            <DialogDescription>
+              配置勾选“深度研究”时子代理并行参数。
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 text-sm">
+            <label className="flex items-center justify-between gap-3">
+              <span>默认开启深度研究</span>
+              <Switch
+                checked={draftEnabledByDefault}
+                onCheckedChange={setDraftEnabledByDefault}
+              />
+            </label>
+
+            <label className="space-y-1 block">
+              <span className="text-xs text-muted-foreground">子代理并发数 (1-20)</span>
+              <Input
+                type="number"
+                min={1}
+                max={20}
+                value={draftConcurrency}
+                onChange={(e) => setDraftConcurrency(e.target.value)}
+              />
+            </label>
+
+            <label className="space-y-1 block">
+              <span className="text-xs text-muted-foreground">单次最大条目数 (1-100)</span>
+              <Input
+                type="number"
+                min={1}
+                max={100}
+                value={draftMaxItems}
+                onChange={(e) => setDraftMaxItems(e.target.value)}
+              />
+            </label>
+
+            <label className="space-y-1 block">
+              <span className="text-xs text-muted-foreground">单个子代理最大迭代 (1-12)</span>
+              <Input
+                type="number"
+                min={1}
+                max={12}
+                value={draftMaxIterations}
+                onChange={(e) => setDraftMaxIterations(e.target.value)}
+              />
+            </label>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setSettingsOpen(false)}
+            >
+              取消
+            </Button>
+            <Button onClick={handleSaveSettings}>
+              保存
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </motion.aside>
   );
 }

@@ -146,6 +146,9 @@ WIDE_RESEARCH_MAX_CONCURRENCY = _read_positive_int_env("MANUS_WIDE_RESEARCH_CONC
 SUB_AGENT_MAX_ITEMS = _read_positive_int_env("MANUS_SUBAGENT_MAX_ITEMS", 20)
 SUB_AGENT_MAX_CONCURRENCY = _read_positive_int_env("MANUS_SUBAGENT_CONCURRENCY", 5)
 SUB_AGENT_MAX_ITERATIONS = _read_positive_int_env("MANUS_SUBAGENT_MAX_ITERATIONS", 4)
+SUB_AGENT_MAX_ITEMS_HARD = _read_positive_int_env("MANUS_SUBAGENT_MAX_ITEMS_HARD", 100)
+SUB_AGENT_MAX_CONCURRENCY_HARD = _read_positive_int_env("MANUS_SUBAGENT_CONCURRENCY_HARD", 20)
+SUB_AGENT_MAX_ITERATIONS_HARD = _read_positive_int_env("MANUS_SUBAGENT_MAX_ITERATIONS_HARD", 12)
 SUB_AGENT_MAX_TOOL_RESULT_CHARS = _read_positive_int_env("MANUS_SUBAGENT_MAX_TOOL_RESULT_CHARS", 4000)
 SUB_AGENT_ALLOWED_TOOLS = ["web_search", "read_file", "write_file"]
 
@@ -313,6 +316,27 @@ def _clean_string_items(items: List[str]) -> List[str]:
     return cleaned
 
 
+def _resolve_positive_runtime_int(
+    value: Optional[int],
+    *,
+    default: int,
+    hard_max: int,
+) -> int:
+    if value is None:
+        base = default
+    else:
+        try:
+            base = int(value)
+        except (TypeError, ValueError):
+            base = default
+
+    if base <= 0:
+        base = default
+    if base > hard_max:
+        base = hard_max
+    return base
+
+
 def _normalize_sub_agent_rel_path(agent_rel_dir: str, raw_path: str) -> str:
     text = (raw_path or "").strip()
     if not text:
@@ -391,6 +415,7 @@ async def _run_sub_agent_loop(
     prompt: str,
     agent_rel_dir: str,
     conversation_id: Optional[str],
+    max_iterations: int,
 ) -> Dict[str, Any]:
     """
     轻量子代理循环：
@@ -416,7 +441,7 @@ async def _run_sub_agent_loop(
     status = "completed"
     error_message = ""
 
-    while iterations < SUB_AGENT_MAX_ITERATIONS:
+    while iterations < max_iterations:
         iterations += 1
         llm_result = await chat_completion(
             messages=messages,
@@ -521,7 +546,7 @@ async def _run_sub_agent_loop(
         else:
             status = "max_iterations"
             final_answer = (
-                f"子代理达到最大迭代轮数（{SUB_AGENT_MAX_ITERATIONS}）仍未形成最终回答。"
+                f"子代理达到最大迭代轮数（{max_iterations}）仍未形成最终回答。"
             )
 
     return {
@@ -654,7 +679,14 @@ async def wide_research(query_template: str, items: List[str]) -> str:
 
 
 # ============ 工具：Spawn Sub Agents（最小多代理骨架）============
-async def spawn_sub_agents(task_template: str, items: List[str], reduce_goal: str = "") -> str:
+async def spawn_sub_agents(
+    task_template: str,
+    items: List[str],
+    reduce_goal: str = "",
+    max_concurrency: Optional[int] = None,
+    max_items: Optional[int] = None,
+    max_iterations: Optional[int] = None,
+) -> str:
     """
     启动多个轻量子代理并行执行同质任务，并执行 reduce 汇总。
     每个子代理在独立目录写入 task/observation/result，最终产出汇总文件。
@@ -663,9 +695,25 @@ async def spawn_sub_agents(task_template: str, items: List[str], reduce_goal: st
     if not cleaned_items:
         return "spawn_sub_agents 执行失败: items 不能为空，且必须是字符串数组。"
 
+    effective_max_items = _resolve_positive_runtime_int(
+        max_items,
+        default=SUB_AGENT_MAX_ITEMS,
+        hard_max=SUB_AGENT_MAX_ITEMS_HARD,
+    )
+    effective_max_concurrency = _resolve_positive_runtime_int(
+        max_concurrency,
+        default=SUB_AGENT_MAX_CONCURRENCY,
+        hard_max=SUB_AGENT_MAX_CONCURRENCY_HARD,
+    )
+    effective_max_iterations = _resolve_positive_runtime_int(
+        max_iterations,
+        default=SUB_AGENT_MAX_ITERATIONS,
+        hard_max=SUB_AGENT_MAX_ITERATIONS_HARD,
+    )
+
     truncated = False
-    if len(cleaned_items) > SUB_AGENT_MAX_ITEMS:
-        cleaned_items = cleaned_items[:SUB_AGENT_MAX_ITEMS]
+    if len(cleaned_items) > effective_max_items:
+        cleaned_items = cleaned_items[:effective_max_items]
         truncated = True
 
     workspace = _get_workspace()
@@ -677,7 +725,7 @@ async def spawn_sub_agents(task_template: str, items: List[str], reduce_goal: st
     os.makedirs(agents_dir, exist_ok=True)
     os.makedirs(sessions_dir, exist_ok=True)
 
-    semaphore = asyncio.Semaphore(SUB_AGENT_MAX_CONCURRENCY)
+    semaphore = asyncio.Semaphore(effective_max_concurrency)
     run_id = f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
 
     async def run_one(index: int, item: str) -> Dict[str, Any]:
@@ -714,6 +762,7 @@ async def spawn_sub_agents(task_template: str, items: List[str], reduce_goal: st
                     prompt=prompt,
                     agent_rel_dir=agent_rel_dir,
                     conversation_id=conv_id,
+                    max_iterations=effective_max_iterations,
                 )
         except Exception as exc:
             loop_result = {
@@ -820,7 +869,9 @@ async def spawn_sub_agents(task_template: str, items: List[str], reduce_goal: st
         "# Sub-Agent Reduce Summary",
         "",
         f"- Total agents: {len(results)}",
-        f"- Max concurrency: {SUB_AGENT_MAX_CONCURRENCY}",
+        f"- Max concurrency: {effective_max_concurrency}",
+        f"- Max iterations per agent: {effective_max_iterations}",
+        f"- Max items: {effective_max_items}",
     ]
     if reduce_goal.strip():
         reduce_lines.append(f"- Reduce goal: {reduce_goal.strip()}")
@@ -869,6 +920,11 @@ async def spawn_sub_agents(task_template: str, items: List[str], reduce_goal: st
         "created_at": datetime.now().isoformat(),
         "task_template": task_template,
         "reduce_goal": reduce_goal,
+        "limits": {
+            "max_concurrency": effective_max_concurrency,
+            "max_items": effective_max_items,
+            "max_iterations": effective_max_iterations,
+        },
         "sub_sessions": [
             {
                 "session_id": row.get("session_id"),
@@ -895,9 +951,10 @@ async def spawn_sub_agents(task_template: str, items: List[str], reduce_goal: st
         f"\n会话索引: {index_rel}"
         f"\n汇总文件: {reduce_summary_rel}"
         f"\n结构化结果: {reduce_json_rel}"
+        f"\n执行参数: concurrency={effective_max_concurrency}, items={effective_max_items}, iterations={effective_max_iterations}"
     )
     if truncated:
-        notice += f"\n注意: 已按上限裁剪到前 {SUB_AGENT_MAX_ITEMS} 个条目。"
+        notice += f"\n注意: 已按上限裁剪到前 {effective_max_items} 个条目。"
     return notice
 
 
@@ -1242,14 +1299,19 @@ TOOL_REGISTRY = {
             "task_template": args.get("task_template"),
             "items": args.get("items"),
             "reduce_goal": args.get("reduce_goal", ""),
+            "max_concurrency": args.get("max_concurrency"),
+            "max_items": args.get("max_items"),
+            "max_iterations": args.get("max_iterations"),
         },
         "required_keys": ["task_template", "items"],
         "non_empty_keys": ["task_template"],
         "string_keys": ["task_template", "reduce_goal"],
         "list_string_keys": ["items"],
+        "int_keys": ["max_concurrency", "max_items", "max_iterations"],
         "usage_hint": (
             '示例: {"task_template": "调研 {item} 2026 最新产品与商业动态", '
-            '"items": ["OpenAI", "Anthropic"], "reduce_goal": "对比商业化进展"}'
+            '"items": ["OpenAI", "Anthropic"], "reduce_goal": "对比商业化进展", '
+            '"max_concurrency": 3, "max_items": 20, "max_iterations": 4}'
         ),
     },
     "shell_exec": {
@@ -1324,6 +1386,7 @@ async def execute_tool(name: str, arguments: Dict[str, Any], conversation_id: Op
         non_empty_keys = tool.get("non_empty_keys", [])
         string_keys = tool.get("string_keys", [])
         list_string_keys = tool.get("list_string_keys", [])
+        int_keys = tool.get("int_keys", [])
         usage_hint = tool.get("usage_hint", "")
 
         missing_keys = [k for k in required_keys if k not in kwargs or kwargs.get(k) is None]
@@ -1362,6 +1425,17 @@ async def execute_tool(name: str, arguments: Dict[str, Any], conversation_id: Op
             raise ValueError(
                 f"工具 `{name}` 参数格式错误(应为非空字符串数组): {', '.join(wrong_list_keys)}。{hint}".strip()
             )
+
+        wrong_int_keys = []
+        for k in int_keys:
+            v = kwargs.get(k)
+            if v is None:
+                continue
+            if not isinstance(v, int) or v <= 0:
+                wrong_int_keys.append(k)
+        if wrong_int_keys:
+            hint = f" {usage_hint}" if usage_hint else ""
+            raise ValueError(f"工具 `{name}` 参数类型错误(应为正整数): {', '.join(wrong_int_keys)}。{hint}".strip())
 
         result = await tool["func"](**kwargs)
         return result
