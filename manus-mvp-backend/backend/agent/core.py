@@ -38,7 +38,19 @@ def _read_positive_int_env(name: str, default: int) -> int:
         return default
 
 
+def _read_positive_float_env(name: str, default: float) -> float:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+        return value if value > 0 else default
+    except ValueError:
+        return default
+
+
 MAX_ITERATIONS = _read_positive_int_env("MANUS_MAX_ITERATIONS", 30)
+PROGRESS_HEARTBEAT_SECONDS = _read_positive_float_env("MANUS_PROGRESS_HEARTBEAT_SECONDS", 2.0)
 DEFAULT_CONVERSATION_STORE = "/tmp/manus_workspace/conversations.json"
 MAX_CONTEXT_MESSAGES = int(os.environ.get("MANUS_MAX_CONTEXT_MESSAGES", "40"))
 MAX_RECENT_MESSAGE_CHARS = int(os.environ.get("MANUS_MAX_RECENT_MESSAGE_CHARS", "4000"))
@@ -458,13 +470,44 @@ class AgentEngine:
             content_streamed = False
             stream_error: Optional[str] = None
 
+            stream_queue: asyncio.Queue[Dict[str, Any]] = asyncio.Queue()
+
+            async def _stream_producer() -> None:
+                try:
+                    async for chunk in chat_completion_stream(
+                        messages,
+                        use_tools=bool(allowed_tools),
+                        allowed_tool_names=allowed_tools if allowed_tools else None,
+                    ):
+                        if isinstance(chunk, dict):
+                            await stream_queue.put(chunk)
+                except Exception as exc:
+                    await stream_queue.put({"type": "error", "data": str(exc)})
+                finally:
+                    await stream_queue.put({"type": "__stream_end__"})
+
+            stream_task = asyncio.create_task(_stream_producer())
             try:
-                async for chunk in chat_completion_stream(
-                    messages,
-                    use_tools=bool(allowed_tools),
-                    allowed_tool_names=allowed_tools if allowed_tools else None,
-                ):
+                while True:
+                    try:
+                        chunk = await asyncio.wait_for(
+                            stream_queue.get(),
+                            timeout=PROGRESS_HEARTBEAT_SECONDS,
+                        )
+                    except asyncio.TimeoutError:
+                        yield {
+                            "event": SSEEventType.THINKING,
+                            "data": json.dumps({
+                                "iteration": iteration,
+                                "status": "waiting_llm",
+                                "message": "正在等待模型响应…",
+                            }, ensure_ascii=False)
+                        }
+                        continue
+
                     chunk_type = chunk.get("type", "")
+                    if chunk_type == "__stream_end__":
+                        break
 
                     if chunk_type == "content":
                         delta = chunk.get("data", "")
@@ -504,6 +547,9 @@ class AgentEngine:
                         break
             except Exception as exc:
                 stream_error = str(exc)
+            finally:
+                if not stream_task.done():
+                    stream_task.cancel()
 
             # 流式失败时兜底到非流式，避免整轮直接失败。
             if stream_error and not content_streamed and not tool_calls_data:
@@ -687,7 +733,26 @@ class AgentEngine:
                     else:
                         # 执行工具（传递 conversation_id 实现会话隔离）
                         try:
-                            result = await execute_tool(tc.name, tc.arguments, conversation_id=conversation.id)
+                            tool_task = asyncio.create_task(
+                                execute_tool(tc.name, tc.arguments, conversation_id=conversation.id)
+                            )
+                            while True:
+                                try:
+                                    result = await asyncio.wait_for(
+                                        asyncio.shield(tool_task),
+                                        timeout=PROGRESS_HEARTBEAT_SECONDS,
+                                    )
+                                    break
+                                except asyncio.TimeoutError:
+                                    yield {
+                                        "event": SSEEventType.THINKING,
+                                        "data": json.dumps({
+                                            "iteration": iteration,
+                                            "status": "waiting_tool",
+                                            "tool_name": tc.name,
+                                            "message": f"工具 `{tc.name}` 执行中…",
+                                        }, ensure_ascii=False)
+                                    }
                             tc.result = result
                             tc.status = ToolCallStatus.COMPLETED
                         except Exception as e:

@@ -47,6 +47,7 @@ export default function Home() {
     messages,
     isLoading,
     isThinking,
+    thinkingStatus,
     error,
     iteration,
     limitReached,
@@ -360,7 +361,7 @@ export default function Home() {
                 ))}
 
                 <AnimatePresence>
-                  {isThinking && <ThinkingIndicator iteration={iteration} />}
+                  {isThinking && <ThinkingIndicator iteration={iteration} status={thinkingStatus} />}
                 </AnimatePresence>
 
                 {error && (

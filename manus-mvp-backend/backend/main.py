@@ -227,7 +227,15 @@ async def chat(request: ChatRequest):
                 conversation.resume_pending = False
                 agent_engine._save_conversations()
 
-    return EventSourceResponse(event_generator())
+    return EventSourceResponse(
+        event_generator(),
+        ping=10,
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 @app.get("/api/conversations")

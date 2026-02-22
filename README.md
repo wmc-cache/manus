@@ -139,6 +139,7 @@ manus-mvp/
 | `VITE_MANUS_API_TOKEN` | 前端请求时附带的鉴权令牌（应与 `MANUS_API_TOKEN` 一致） | 否 |
 | `MANUS_SANDBOX_INHERIT_ENV` | 是否让工具子进程继承全部环境变量（默认否，仅保留安全变量） | 否 |
 | `MANUS_MAX_ITERATIONS` | Agent 单次执行最大轮数（默认 30） | 否 |
+| `MANUS_PROGRESS_HEARTBEAT_SECONDS` | 长步骤进度心跳间隔秒数（默认 2.0） | 否 |
 | `MANUS_CONVERSATIONS_FILE` | 会话持久化文件路径（默认 `/tmp/manus_workspace/conversations.json`） | 否 |
 | `MANUS_MAX_CONTEXT_MESSAGES` | 发送给 LLM 的最大历史消息条数（默认 40） | 否 |
 | `MANUS_MAX_RECENT_MESSAGE_CHARS` | 最近消息的单条最大字符数（默认 4000） | 否 |

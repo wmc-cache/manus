@@ -46,6 +46,8 @@ export interface SSEEvent {
 export interface ThinkingEventData {
   iteration: number;
   status: string;
+  message?: string;
+  tool_name?: string;
 }
 
 export interface ContentEventData {

@@ -7,9 +7,25 @@ import { Brain } from "lucide-react";
 
 interface ThinkingIndicatorProps {
   iteration: number;
+  status?: string | null;
 }
 
-export default function ThinkingIndicator({ iteration }: ThinkingIndicatorProps) {
+const STATUS_LABEL: Record<string, string> = {
+  thinking: "正在思考",
+  waiting_llm: "正在等待模型响应",
+  waiting_tool: "正在执行工具",
+  queued: "任务排队中",
+  already_running: "已有任务在执行",
+};
+
+function normalizeStatusLabel(raw: string | null | undefined): string {
+  const text = (raw || "").trim();
+  if (!text) return STATUS_LABEL.thinking;
+  return STATUS_LABEL[text] || text;
+}
+
+export default function ThinkingIndicator({ iteration, status }: ThinkingIndicatorProps) {
+  const label = normalizeStatusLabel(status);
   return (
     <motion.div
       initial={{ opacity: 0, y: 10 }}
@@ -38,7 +54,7 @@ export default function ThinkingIndicator({ iteration }: ThinkingIndicatorProps)
 
       <div className="flex items-center gap-2">
         <span className="text-sm text-muted-foreground">
-          正在思考
+          {label}
           {iteration > 1 && (
             <span className="text-xs text-muted-foreground/60 ml-1">
               (第 {iteration} 轮)

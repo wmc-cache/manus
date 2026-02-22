@@ -3,6 +3,7 @@ import type {
   Message,
   ToolCall,
   Conversation,
+  ThinkingEventData,
   ContentEventData,
   ToolCallEventData,
   ToolResultEventData,
@@ -102,6 +103,7 @@ interface AgentState {
   messages: Message[];
   isLoading: boolean;
   isThinking: boolean;
+  thinkingStatus: string | null;
   currentToolCall: ToolCall | null;
   conversationId: string | null;
   error: string | null;
@@ -381,6 +383,7 @@ export function useAgent() {
     messages: [],
     isLoading: false,
     isThinking: false,
+    thinkingStatus: null,
     currentToolCall: null,
     conversationId: null,
     error: null,
@@ -463,6 +466,7 @@ export function useAgent() {
         conversationId: data.id,
         isLoading: false,
         isThinking: false,
+        thinkingStatus: null,
         currentToolCall: null,
         error: null,
         iteration: 0,
@@ -529,6 +533,7 @@ export function useAgent() {
         messages: [...prev.messages, userMessage],
         isLoading: true,
         isThinking: true,
+        thinkingStatus: "thinking",
         error: null,
         iteration: 0,
         limitReached: false,
@@ -539,6 +544,7 @@ export function useAgent() {
         ...prev,
         isLoading: true,
         isThinking: true,
+        thinkingStatus: "thinking",
         error: null,
         iteration: 0,
         limitReached: false,
@@ -605,11 +611,18 @@ export function useAgent() {
 
               switch (currentEvent) {
                 case "thinking":
-                  setState((prev) => ({
-                    ...prev,
-                    isThinking: true,
-                    iteration: data.iteration || prev.iteration,
-                  }));
+                  {
+                    const thinkingData = data as ThinkingEventData;
+                    const rawStatus = typeof thinkingData.status === "string" ? thinkingData.status : "";
+                    const rawMessage = typeof thinkingData.message === "string" ? thinkingData.message.trim() : "";
+                    const thinkingStatus = rawMessage || rawStatus || "thinking";
+                    setState((prev) => ({
+                      ...prev,
+                      isThinking: true,
+                      thinkingStatus,
+                      iteration: thinkingData.iteration || prev.iteration,
+                    }));
+                  }
                   break;
 
                 case "content": {
@@ -679,6 +692,7 @@ export function useAgent() {
                       ...prev,
                       messages: msgs,
                       isThinking: false,
+                      thinkingStatus: null,
                       currentToolCall: tc,
                     };
                   });
@@ -744,6 +758,7 @@ export function useAgent() {
                       ...prev,
                       isLoading: false,
                       isThinking: false,
+                      thinkingStatus: null,
                       currentToolCall: null,
                       limitReached,
                       continueMessage: limitReached
@@ -766,6 +781,7 @@ export function useAgent() {
                     ...prev,
                     isLoading: false,
                     isThinking: false,
+                    thinkingStatus: null,
                     error: typeof data === "string" ? data : data.message || "未知错误",
                   }));
                   break;
@@ -798,6 +814,7 @@ export function useAgent() {
       ...prev,
       isLoading: false,
       isThinking: false,
+      thinkingStatus: null,
       currentToolCall: null,
     }));
   }, []);
@@ -879,6 +896,7 @@ export function useAgent() {
         messages: [],
         isLoading: false,
         isThinking: false,
+        thinkingStatus: null,
         currentToolCall: null,
         conversationId: null,
         error: null,
@@ -909,6 +927,7 @@ export function useAgent() {
       messages: [],
       isLoading: false,
       isThinking: false,
+      thinkingStatus: null,
       currentToolCall: null,
       conversationId: null,
       error: null,
