@@ -3,7 +3,9 @@ import json
 import sys
 import os
 import asyncio
+import re
 from datetime import datetime
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -69,6 +71,58 @@ def _is_authorized_ws(websocket: WebSocket) -> bool:
     query_token = websocket.query_params.get("token", "").strip()
     token = header_token or query_token
     return bool(token) and token == API_TOKEN
+
+
+def _load_sub_agent_index(conversation_id: str):
+    """
+    读取子代理会话索引文件（若存在）。
+    路径: <workspace>/multi_agent/sub_agent_index.json
+    """
+    try:
+        workspace_root = Path(get_workspace_root(conversation_id))
+        index_path = workspace_root / "multi_agent" / "sub_agent_index.json"
+        if not index_path.exists():
+            return None
+        payload = json.loads(index_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            return None
+        return payload
+    except Exception:
+        return None
+
+
+_SUB_AGENT_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
+
+
+def _load_sub_agent_session(conversation_id: str, session_id: str):
+    """
+    读取指定子代理会话详情（若存在且归属于当前会话）。
+    路径: <workspace>/multi_agent/sessions/<session_id>.json
+    """
+    sid = (session_id or "").strip()
+    if not _SUB_AGENT_SESSION_ID_RE.fullmatch(sid):
+        return None
+
+    try:
+        workspace_root = Path(get_workspace_root(conversation_id)).resolve()
+        session_path = (workspace_root / "multi_agent" / "sessions" / f"{sid}.json").resolve()
+
+        if workspace_root != session_path and workspace_root not in session_path.parents:
+            return None
+        if not session_path.exists():
+            return None
+
+        payload = json.loads(session_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            return None
+
+        parent_id = payload.get("parent_conversation_id")
+        if isinstance(parent_id, str) and parent_id and parent_id != conversation_id:
+            return None
+
+        return payload
+    except Exception:
+        return None
 
 
 @app.middleware("http")
@@ -241,10 +295,24 @@ async def get_conversation(conversation_id: str):
         "awaiting_resume": conv.awaiting_resume,
         "resume_pending": conv.resume_pending,
         "plan": conv.plan.model_dump(mode="json") if conv.plan else None,
+        "sub_agent_index": _load_sub_agent_index(conv.id),
         "created_at": conv.created_at.isoformat(),
         "manual_takeover_enabled": conv.manual_takeover_enabled,
         "manual_takeover_target": conv.manual_takeover_target,
     }
+
+
+@app.get("/api/conversations/{conversation_id}/sub-agents/{session_id}")
+async def get_sub_agent_session(conversation_id: str, session_id: str):
+    """获取单个子代理会话详情"""
+    if conversation_id not in agent_engine.conversations:
+        raise HTTPException(status_code=404, detail="对话不存在")
+
+    payload = _load_sub_agent_session(conversation_id, session_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="子代理会话不存在")
+
+    return payload
 
 
 @app.delete("/api/conversations/{conversation_id}")

@@ -39,6 +39,7 @@
 |------|------|------|
 | `web_search` | 网页搜索 | 通过 DuckDuckGo 搜索互联网 |
 | `wide_research` | 并行研究 | 对一组对象并发搜索并落盘 `research/summary.md` |
+| `spawn_sub_agents` | 子代理并行 | 为每个对象创建独立子代理会话轨迹与目录，并生成 reduce 汇总 |
 | `shell_exec` | 终端命令 | 在工作目录执行 shell 命令 |
 | `execute_code` | 代码执行 | 在沙箱中执行 Python 代码 |
 | `read_file` | 读取文件 | 读取指定路径的文件内容 |
@@ -149,6 +150,9 @@ manus-mvp/
 | `MANUS_ENABLE_TOOL_STATE_MACHINE` | 是否启用按阶段收敛工具集合（默认开启） | 否 |
 | `MANUS_WIDE_RESEARCH_MAX_ITEMS` | `wide_research` 单次最大条目数（默认 20） | 否 |
 | `MANUS_WIDE_RESEARCH_CONCURRENCY` | `wide_research` 并发度（默认 5） | 否 |
+| `MANUS_SUBAGENT_MAX_ITEMS` | `spawn_sub_agents` 单次最大子代理数（默认 20） | 否 |
+| `MANUS_SUBAGENT_CONCURRENCY` | `spawn_sub_agents` 并发度（默认 5） | 否 |
+| `MANUS_SUBAGENT_MAX_ITERATIONS` | `spawn_sub_agents` 内部每个子代理最大循环轮数（默认 4） | 否 |
 
 ## License
 

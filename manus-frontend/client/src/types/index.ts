@@ -99,11 +99,76 @@ export interface PlanUpdateEventData {
   todo_path?: string;
 }
 
+// ============ 子代理索引类型 ============
+
+export interface SubAgentSessionRefData {
+  session_id: string;
+  session_path: string;
+  agent_id: string;
+  item: string;
+  status: string;
+  observation_path: string;
+}
+
+export interface SubAgentIndexData {
+  run_id: string;
+  parent_conversation_id: string;
+  created_at: string;
+  task_template?: string;
+  reduce_goal?: string;
+  sub_sessions: SubAgentSessionRefData[];
+  reduce_summary_path?: string;
+  reduce_results_path?: string;
+}
+
+export interface SubAgentToolStepData {
+  step?: number;
+  tool?: string;
+  arguments?: Record<string, unknown>;
+  result_preview?: string;
+  status?: string;
+  error?: string;
+}
+
+export interface SubAgentMessageToolCallData {
+  id: string;
+  type: string;
+  function: {
+    name: string;
+    arguments: string;
+  };
+}
+
+export interface SubAgentMessageData {
+  role: string;
+  content?: string;
+  tool_call_id?: string;
+  tool_calls?: SubAgentMessageToolCallData[];
+}
+
+export interface SubAgentSessionDetailData {
+  id: string;
+  run_id?: string;
+  parent_conversation_id: string;
+  agent_id: string;
+  item: string;
+  prompt: string;
+  workspace?: string;
+  status: string;
+  iterations: number;
+  final_answer: string;
+  tool_steps: SubAgentToolStepData[];
+  messages: SubAgentMessageData[];
+  created_at: string;
+  error?: string;
+}
+
 // ============ 工具名称映射 ============
 
 export const TOOL_NAMES: Record<string, string> = {
   web_search: "网页搜索",
   wide_research: "并行研究",
+  spawn_sub_agents: "子代理并行",
   shell_exec: "终端命令",
   execute_code: "代码执行",
   browser_navigate: "浏览网页",
@@ -116,6 +181,7 @@ export const TOOL_NAMES: Record<string, string> = {
 export const TOOL_ICONS: Record<string, string> = {
   web_search: "Globe",
   wide_research: "ListTodo",
+  spawn_sub_agents: "ListTodo",
   shell_exec: "Terminal",
   execute_code: "Code",
   browser_navigate: "Globe",

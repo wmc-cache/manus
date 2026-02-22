@@ -238,6 +238,7 @@ class ToolStateMachine:
         1: {
             "web_search",
             "wide_research",
+            "spawn_sub_agents",
             "browser_navigate",
             "browser_screenshot",
             "browser_get_content",

@@ -78,12 +78,13 @@ SYSTEM_PROMPT = """你是 Manus，一个强大的 AI Agent 助手。你在一台
 你拥有以下工具能力：
 1. **web_search** - 搜索互联网获取最新信息
 2. **wide_research** - 并行研究多个对象并自动产出汇总文件
-3. **shell_exec** - 在终端中执行 shell 命令（用户可以在终端窗口看到）
-4. **execute_code** - 执行 Python 代码（代码会显示在编辑器窗口中）
-5. **browser_navigate** - 在浏览器中打开网页（用户可以在浏览器窗口看到截图）
-6. **browser_get_content** - 获取当前浏览器页面的文本内容
-7. **read_file** - 读取文件内容（文件会在编辑器窗口中显示）
-8. **write_file** - 创建或写入文件（文件会在编辑器窗口中显示）
+3. **spawn_sub_agents** - 启动多个轻量子代理并并行执行，自动做 reduce 汇总
+4. **shell_exec** - 在终端中执行 shell 命令（用户可以在终端窗口看到）
+5. **execute_code** - 执行 Python 代码（代码会显示在编辑器窗口中）
+6. **browser_navigate** - 在浏览器中打开网页（用户可以在浏览器窗口看到截图）
+7. **browser_get_content** - 获取当前浏览器页面的文本内容
+8. **read_file** - 读取文件内容（文件会在编辑器窗口中显示）
+9. **write_file** - 创建或写入文件（文件会在编辑器窗口中显示）
 
 工作流程：
 1. 分析用户的请求，理解任务目标
@@ -103,6 +104,7 @@ SYSTEM_PROMPT = """你是 Manus，一个强大的 AI Agent 助手。你在一台
 - **严禁在缺少参数时调用工具：write_file 必须同时提供 path 和 content；read_file 必须提供 path。若信息不足，先询问用户或先通过其他工具获取。**
 - **写入长代码文件时每轮只调用 1 次 write_file；若内容过长，先写可运行最小版本再增量完善，避免参数 JSON 被截断。**
 - **使用 wide_research 时，优先给出清晰的 query_template 和精简的 items 列表（例如 5~20 个），完成后读取汇总文件再给出结论。**
+- **当任务需要按同一模板并行处理多个对象且希望保留“子代理产物 + reduce 汇总”时，优先使用 spawn_sub_agents。**
 """
 
 # 工具定义（OpenAI Function Calling 格式）
@@ -145,6 +147,34 @@ TOOLS = [
                     }
                 },
                 "required": ["query_template", "items"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "spawn_sub_agents",
+            "description": "启动多个轻量子代理并行执行同质任务。每个子代理会在 multi_agent/agents/<agent_id>/ 产出 task/observation/result，并在 multi_agent/reduce_summary.md 做汇总。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_template": {
+                        "type": "string",
+                        "description": "子代理任务模板，支持 {item} 占位符"
+                    },
+                    "items": {
+                        "type": "array",
+                        "description": "待并行处理对象列表（字符串数组）",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "reduce_goal": {
+                        "type": "string",
+                        "description": "可选，reduce 阶段的汇总目标说明"
+                    }
+                },
+                "required": ["task_template", "items"]
             }
         }
     },

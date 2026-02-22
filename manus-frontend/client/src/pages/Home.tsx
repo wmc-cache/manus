@@ -11,6 +11,7 @@ import { useRef, useEffect, useState, useCallback } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { PanelLeftClose, PanelLeft, Monitor, PanelRightClose } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useAgent } from "@/hooks/useAgent";
 import { useSandbox } from "@/hooks/useSandbox";
 import Sidebar from "@/components/Sidebar";
@@ -19,6 +20,7 @@ import MessageBubble from "@/components/MessageBubble";
 import ThinkingIndicator from "@/components/ThinkingIndicator";
 import ChatInput from "@/components/ChatInput";
 import ComputerPanel from "@/components/sandbox/ComputerPanel";
+import type { SubAgentSessionDetailData } from "@/types";
 import { toast } from "sonner";
 
 const PLAN_STATUS_LABEL: Record<string, string> = {
@@ -26,6 +28,14 @@ const PLAN_STATUS_LABEL: Record<string, string> = {
   running: "执行中",
   completed: "已完成",
   failed: "失败",
+};
+
+const SUB_AGENT_STATUS_LABEL: Record<string, string> = {
+  running: "执行中",
+  completed: "已完成",
+  completed_with_limit: "已完成(达上限)",
+  failed: "失败",
+  max_iterations: "达上限",
 };
 
 const HERO_BG =
@@ -44,9 +54,11 @@ export default function Home() {
     plan,
     planReason,
     todoPath,
+    subAgentIndex,
     conversationId,
     sendMessage,
     loadConversation,
+    loadSubAgentSession,
     continueAgent,
     deleteConversation,
     stopAgent,
@@ -57,6 +69,10 @@ export default function Home() {
 
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [computerOpen, setComputerOpen] = useState(true);
+  const [subAgentDialogOpen, setSubAgentDialogOpen] = useState(false);
+  const [subAgentSessionLoading, setSubAgentSessionLoading] = useState(false);
+  const [subAgentSessionError, setSubAgentSessionError] = useState<string | null>(null);
+  const [activeSubAgentSession, setActiveSubAgentSession] = useState<SubAgentSessionDetailData | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   // 记录上一次的 conversationId，用于检测变化
   const prevConvIdRef = useRef<string | null>(null);
@@ -80,6 +96,13 @@ export default function Home() {
       prevConvIdRef.current = conversationId;
     }
   }, [conversationId, sandbox.switchConversation]);
+
+  useEffect(() => {
+    setSubAgentDialogOpen(false);
+    setSubAgentSessionLoading(false);
+    setSubAgentSessionError(null);
+    setActiveSubAgentSession(null);
+  }, [conversationId]);
 
   const handleNewChat = useCallback(() => {
     clearMessages();
@@ -121,6 +144,25 @@ export default function Home() {
     },
     [conversations, deleteConversation]
   );
+
+  const handleOpenSubAgentSession = useCallback(async (sessionId: string) => {
+    if (!conversationId || !sessionId) return;
+
+    setSubAgentDialogOpen(true);
+    setSubAgentSessionLoading(true);
+    setSubAgentSessionError(null);
+    setActiveSubAgentSession(null);
+
+    const detail = await loadSubAgentSession(conversationId, sessionId);
+    if (!detail) {
+      setSubAgentSessionError("子代理会话加载失败，请稍后重试。");
+      setSubAgentSessionLoading(false);
+      return;
+    }
+
+    setActiveSubAgentSession(detail);
+    setSubAgentSessionLoading(false);
+  }, [conversationId, loadSubAgentSession]);
 
   const hasMessages = messages.length > 0;
   const manualTakeoverActive = sandbox.manualTakeoverEnabled;
@@ -256,6 +298,63 @@ export default function Home() {
                   </div>
                 )}
 
+                {subAgentIndex && subAgentIndex.sub_sessions.length > 0 && (
+                  <div className="mx-4 mb-3 rounded-xl border border-border/30 bg-background/40 p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs text-muted-foreground">子代理运行树</p>
+                      <span className="text-[11px] text-muted-foreground/80">
+                        {subAgentIndex.sub_sessions.length} agents
+                      </span>
+                    </div>
+                    <p className="mt-1 text-[11px] font-mono text-muted-foreground/90 break-all">
+                      run: {subAgentIndex.run_id}
+                    </p>
+                    {subAgentIndex.reduce_goal && (
+                      <p className="mt-1 text-xs text-foreground/90">
+                        reduce: {subAgentIndex.reduce_goal}
+                      </p>
+                    )}
+                    <div className="mt-2 space-y-1">
+                      {subAgentIndex.sub_sessions.map((session) => {
+                        const status = SUB_AGENT_STATUS_LABEL[session.status] || session.status;
+                        const isRunning = session.status === "running";
+                        const isFailed = session.status === "failed";
+                        const statusClass = isRunning
+                          ? "border-primary/40 bg-primary/10 text-primary"
+                          : isFailed
+                            ? "border-destructive/40 bg-destructive/10 text-destructive"
+                            : "border-border/30 bg-background/30 text-muted-foreground";
+                        return (
+                          <button
+                            type="button"
+                            key={session.session_id}
+                            className={`w-full rounded-md border px-2 py-1 text-left text-xs transition-colors hover:bg-background/50 ${statusClass}`}
+                            onClick={() => {
+                              void handleOpenSubAgentSession(session.session_id);
+                            }}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span>{session.item} ({session.agent_id})</span>
+                              <span>{status}</span>
+                            </div>
+                            <p className="mt-1 font-mono text-[11px] break-all opacity-80">
+                              {session.session_path}
+                            </p>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <p className="mt-2 text-[11px] text-muted-foreground/70">
+                      点击条目可查看子代理会话轨迹
+                    </p>
+                    {subAgentIndex.reduce_summary_path && (
+                      <p className="mt-2 text-[11px] font-mono text-muted-foreground/80 break-all">
+                        summary: {subAgentIndex.reduce_summary_path}
+                      </p>
+                    )}
+                  </div>
+                )}
+
                 {messages.map((msg) => (
                   <MessageBubble key={msg.id} message={msg} />
                 ))}
@@ -303,6 +402,112 @@ export default function Home() {
             showContinue={limitReached}
             continueLabel="继续"
           />
+
+          <Dialog
+            open={subAgentDialogOpen}
+            onOpenChange={(open) => {
+              setSubAgentDialogOpen(open);
+            }}
+          >
+            <DialogContent className="max-w-3xl bg-background/95 border-border/50">
+              <DialogHeader>
+                <DialogTitle>子代理会话详情</DialogTitle>
+                <DialogDescription>
+                  {activeSubAgentSession
+                    ? `${activeSubAgentSession.item} (${activeSubAgentSession.agent_id})`
+                    : "查看单个子代理的执行轨迹与结果"}
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="max-h-[65vh] space-y-3 overflow-y-auto pr-1 text-sm">
+                {subAgentSessionLoading && (
+                  <div className="rounded-md border border-border/40 bg-background/40 p-3 text-muted-foreground">
+                    正在加载子代理会话...
+                  </div>
+                )}
+
+                {!subAgentSessionLoading && subAgentSessionError && (
+                  <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-destructive">
+                    {subAgentSessionError}
+                  </div>
+                )}
+
+                {!subAgentSessionLoading && !subAgentSessionError && activeSubAgentSession && (
+                  <>
+                    <div className="rounded-md border border-border/40 bg-background/30 p-3 space-y-1 text-xs">
+                      <p><span className="text-muted-foreground">status:</span> {activeSubAgentSession.status}</p>
+                      <p><span className="text-muted-foreground">iterations:</span> {activeSubAgentSession.iterations}</p>
+                      <p><span className="text-muted-foreground">session:</span> <span className="font-mono">{activeSubAgentSession.id}</span></p>
+                      {activeSubAgentSession.workspace && (
+                        <p><span className="text-muted-foreground">workspace:</span> <span className="font-mono break-all">{activeSubAgentSession.workspace}</span></p>
+                      )}
+                      <p><span className="text-muted-foreground">created:</span> {activeSubAgentSession.created_at}</p>
+                    </div>
+
+                    <div className="rounded-md border border-border/40 bg-background/30 p-3">
+                      <p className="mb-2 text-xs text-muted-foreground">Final Answer</p>
+                      <pre className="whitespace-pre-wrap break-words text-sm font-sans">
+                        {activeSubAgentSession.final_answer || "(empty)"}
+                      </pre>
+                    </div>
+
+                    {activeSubAgentSession.tool_steps.length > 0 && (
+                      <div className="rounded-md border border-border/40 bg-background/30 p-3">
+                        <p className="mb-2 text-xs text-muted-foreground">Tool Steps</p>
+                        <div className="space-y-2">
+                          {activeSubAgentSession.tool_steps.map((step, idx) => (
+                            <div key={`${step.step ?? idx}-${step.tool ?? "tool"}`} className="rounded border border-border/30 px-2 py-1 text-xs">
+                              <p>
+                                step {step.step ?? idx + 1} | {step.tool || "(unknown)"}
+                              </p>
+                              {step.status && <p className="text-muted-foreground">status: {step.status}</p>}
+                              {step.result_preview && (
+                                <p className="mt-1 whitespace-pre-wrap break-words text-muted-foreground">
+                                  {step.result_preview}
+                                </p>
+                              )}
+                              {step.error && (
+                                <p className="mt-1 whitespace-pre-wrap break-words text-destructive">
+                                  {step.error}
+                                </p>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {activeSubAgentSession.messages.length > 0 && (
+                      <div className="rounded-md border border-border/40 bg-background/30 p-3">
+                        <p className="mb-2 text-xs text-muted-foreground">Message Trace</p>
+                        <div className="space-y-2">
+                          {activeSubAgentSession.messages.map((msg, idx) => (
+                            <div key={`${msg.role}-${idx}`} className="rounded border border-border/30 px-2 py-1">
+                              <p className="text-xs text-muted-foreground">{msg.role}</p>
+                              {msg.content && (
+                                <p className="mt-1 whitespace-pre-wrap break-words text-xs">
+                                  {msg.content}
+                                </p>
+                              )}
+                              {msg.tool_calls && msg.tool_calls.length > 0 && (
+                                <div className="mt-1 space-y-1">
+                                  {msg.tool_calls.map((tc) => (
+                                    <p key={tc.id} className="font-mono text-[11px] text-muted-foreground">
+                                      {tc.function.name}({tc.function.arguments})
+                                    </p>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            </DialogContent>
+          </Dialog>
         </main>
 
         {/* 计算机窗口面板 */}

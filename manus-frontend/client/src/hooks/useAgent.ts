@@ -9,6 +9,8 @@ import type {
   DoneEventData,
   PlanUpdateEventData,
   TaskPlanData,
+  SubAgentIndexData,
+  SubAgentSessionDetailData,
 } from "@/types";
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
@@ -109,6 +111,7 @@ interface AgentState {
   plan: TaskPlanData | null;
   planReason: string | null;
   todoPath: string | null;
+  subAgentIndex: SubAgentIndexData | null;
 }
 
 interface SendMessageOptions {
@@ -149,6 +152,7 @@ interface ConversationDetailResponse {
   awaiting_resume?: boolean;
   resume_pending?: boolean;
   plan?: TaskPlanData | null;
+  sub_agent_index?: unknown;
   created_at: string;
 }
 
@@ -241,6 +245,136 @@ function normalizePlan(raw: unknown): TaskPlanData | null {
   };
 }
 
+function normalizeSubAgentIndex(raw: unknown): SubAgentIndexData | null {
+  if (!raw || typeof raw !== "object") return null;
+  const index = raw as Partial<SubAgentIndexData>;
+  if (
+    typeof index.run_id !== "string"
+    || typeof index.parent_conversation_id !== "string"
+    || typeof index.created_at !== "string"
+  ) {
+    return null;
+  }
+
+  const subSessions = Array.isArray(index.sub_sessions)
+    ? index.sub_sessions
+        .filter((item): item is SubAgentIndexData["sub_sessions"][number] => (
+          !!item
+          && typeof item === "object"
+          && typeof (item as SubAgentIndexData["sub_sessions"][number]).session_id === "string"
+          && typeof (item as SubAgentIndexData["sub_sessions"][number]).session_path === "string"
+          && typeof (item as SubAgentIndexData["sub_sessions"][number]).agent_id === "string"
+          && typeof (item as SubAgentIndexData["sub_sessions"][number]).item === "string"
+          && typeof (item as SubAgentIndexData["sub_sessions"][number]).status === "string"
+          && typeof (item as SubAgentIndexData["sub_sessions"][number]).observation_path === "string"
+        ))
+        .map((item) => ({
+          session_id: item.session_id,
+          session_path: item.session_path,
+          agent_id: item.agent_id,
+          item: item.item,
+          status: item.status,
+          observation_path: item.observation_path,
+        }))
+    : [];
+
+  return {
+    run_id: index.run_id,
+    parent_conversation_id: index.parent_conversation_id,
+    created_at: index.created_at,
+    task_template: typeof index.task_template === "string" ? index.task_template : undefined,
+    reduce_goal: typeof index.reduce_goal === "string" ? index.reduce_goal : undefined,
+    sub_sessions: subSessions,
+    reduce_summary_path: typeof index.reduce_summary_path === "string" ? index.reduce_summary_path : undefined,
+    reduce_results_path: typeof index.reduce_results_path === "string" ? index.reduce_results_path : undefined,
+  };
+}
+
+function normalizeSubAgentSessionDetail(raw: unknown): SubAgentSessionDetailData | null {
+  if (!raw || typeof raw !== "object") return null;
+  const session = raw as Partial<SubAgentSessionDetailData>;
+
+  if (
+    typeof session.id !== "string"
+    || typeof session.parent_conversation_id !== "string"
+    || typeof session.agent_id !== "string"
+    || typeof session.item !== "string"
+    || typeof session.prompt !== "string"
+    || typeof session.status !== "string"
+    || typeof session.created_at !== "string"
+  ) {
+    return null;
+  }
+
+  const toolSteps = Array.isArray(session.tool_steps)
+    ? session.tool_steps
+        .filter((step): step is SubAgentSessionDetailData["tool_steps"][number] => !!step && typeof step === "object")
+        .map((step) => {
+          const normalized: SubAgentSessionDetailData["tool_steps"][number] = {};
+          if (typeof step.step === "number") normalized.step = step.step;
+          if (typeof step.tool === "string") normalized.tool = step.tool;
+          if (step.arguments && typeof step.arguments === "object") {
+            normalized.arguments = step.arguments as Record<string, unknown>;
+          }
+          if (typeof step.result_preview === "string") normalized.result_preview = step.result_preview;
+          if (typeof step.status === "string") normalized.status = step.status;
+          if (typeof step.error === "string") normalized.error = step.error;
+          return normalized;
+        })
+    : [];
+
+  const messages = Array.isArray(session.messages)
+    ? session.messages
+        .filter((msg): msg is SubAgentSessionDetailData["messages"][number] => (
+          !!msg
+          && typeof msg === "object"
+          && typeof (msg as SubAgentSessionDetailData["messages"][number]).role === "string"
+        ))
+        .map((msg) => ({
+          role: msg.role,
+          content: typeof msg.content === "string" ? msg.content : undefined,
+          tool_call_id: typeof msg.tool_call_id === "string" ? msg.tool_call_id : undefined,
+          tool_calls: Array.isArray(msg.tool_calls)
+            ? msg.tool_calls
+                .filter((tc): tc is NonNullable<typeof msg.tool_calls>[number] => (
+                  !!tc
+                  && typeof tc.id === "string"
+                  && typeof tc.type === "string"
+                  && !!tc.function
+                  && typeof tc.function === "object"
+                  && typeof tc.function.name === "string"
+                  && typeof tc.function.arguments === "string"
+                ))
+                .map((tc) => ({
+                  id: tc.id,
+                  type: tc.type,
+                  function: {
+                    name: tc.function.name,
+                    arguments: tc.function.arguments,
+                  },
+                }))
+            : undefined,
+        }))
+    : [];
+
+  return {
+    id: session.id,
+    run_id: typeof session.run_id === "string" ? session.run_id : undefined,
+    parent_conversation_id: session.parent_conversation_id,
+    agent_id: session.agent_id,
+    item: session.item,
+    prompt: session.prompt,
+    workspace: typeof session.workspace === "string" ? session.workspace : undefined,
+    status: session.status,
+    iterations: typeof session.iterations === "number" ? session.iterations : 0,
+    final_answer: typeof session.final_answer === "string" ? session.final_answer : "",
+    tool_steps: toolSteps,
+    messages,
+    created_at: session.created_at,
+    error: typeof session.error === "string" ? session.error : undefined,
+  };
+}
+
 export function useAgent() {
   const [state, setState] = useState<AgentState>({
     conversations: [],
@@ -256,6 +390,7 @@ export function useAgent() {
     plan: null,
     planReason: null,
     todoPath: null,
+    subAgentIndex: null,
   });
 
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -336,6 +471,7 @@ export function useAgent() {
         plan: normalizePlan(data.plan),
         planReason: null,
         todoPath: null,
+        subAgentIndex: normalizeSubAgentIndex(data.sub_agent_index),
       }));
       safeSetLocalStorage(ACTIVE_CONVERSATION_STORAGE_KEY, data.id);
 
@@ -346,6 +482,27 @@ export function useAgent() {
         error: err instanceof Error ? err.message : "加载历史对话失败",
       }));
       return false;
+    }
+  }, []);
+
+  const loadSubAgentSession = useCallback(async (
+    conversationId: string,
+    sessionId: string,
+  ): Promise<SubAgentSessionDetailData | null> => {
+    const convId = (conversationId || "").trim();
+    const sid = (sessionId || "").trim();
+    if (!convId || !sid) return null;
+
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/conversations/${encodeURIComponent(convId)}/sub-agents/${encodeURIComponent(sid)}`,
+        { headers: buildAuthHeaders() },
+      );
+      if (!res.ok) return null;
+      const data = (await res.json()) as unknown;
+      return normalizeSubAgentSessionDetail(data);
+    } catch {
+      return null;
     }
   }, []);
 
@@ -597,6 +754,9 @@ export function useAgent() {
                       clearPendingExecutionMarker();
                     }
                     void fetchConversations();
+                    if (doneData.conversation_id) {
+                      void loadConversation(doneData.conversation_id);
+                    }
                   }
                   break;
 
@@ -628,7 +788,7 @@ export function useAgent() {
         error: err instanceof Error ? err.message : "连接失败",
       }));
     }
-  }, [state.conversationId, fetchConversations]);
+  }, [state.conversationId, fetchConversations, loadConversation]);
 
   const stopAgent = useCallback(() => {
     clearPendingExecutionMarker();
@@ -728,6 +888,7 @@ export function useAgent() {
         plan: null,
         planReason: null,
         todoPath: null,
+        subAgentIndex: null,
       }));
       return true;
     } catch (err) {
@@ -757,6 +918,7 @@ export function useAgent() {
       plan: null,
       planReason: null,
       todoPath: null,
+      subAgentIndex: null,
     }));
   }, []);
 
@@ -859,6 +1021,7 @@ export function useAgent() {
     deleteConversation,
     fetchConversations,
     loadConversation,
+    loadSubAgentSession,
     stopAgent,
     clearMessages,
   };

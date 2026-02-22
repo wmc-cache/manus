@@ -24,6 +24,7 @@ import { TOOL_NAMES } from "@/types";
 const TOOL_ICON_MAP: Record<string, React.ElementType> = {
   web_search: Globe,
   wide_research: ListTodo,
+  spawn_sub_agents: ListTodo,
   shell_exec: Terminal,
   execute_code: Code,
   browser_navigate: Globe,
@@ -72,6 +73,11 @@ export default function ToolCallCard({ toolCall }: ToolCallCardProps) {
       const template = (args.query_template as string) || "";
       const items = Array.isArray(args.items) ? args.items : [];
       return `${template || "(无模板)"} [items=${items.length}]`;
+    }
+    if (toolCall.name === "spawn_sub_agents") {
+      const template = (args.task_template as string) || "";
+      const items = Array.isArray(args.items) ? args.items : [];
+      return `${template || "(无模板)"} [agents=${items.length}]`;
     }
     if (toolCall.name === "shell_exec") return `$ ${((args.command as string) || "").slice(0, 60)}`;
     if (toolCall.name === "execute_code") {

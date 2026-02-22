@@ -48,6 +48,7 @@ CONTINUE_MESSAGES = {"继续", "继续。", "continue", "continue.", "go on"}
 DEFAULT_TOOL_NAMES = [
     "web_search",
     "wide_research",
+    "spawn_sub_agents",
     "shell_exec",
     "execute_code",
     "browser_navigate",

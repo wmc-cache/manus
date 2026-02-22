@@ -1,14 +1,18 @@
 """Agent 工具系统 - 定义和执行各种工具，联动计算机窗口（支持会话隔离）"""
+import json
 import os
 import sys
 import re
 import asyncio
 import traceback
 from contextvars import ContextVar
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional, List
 from urllib.parse import unquote, urlparse, parse_qs
+import uuid
 
+from llm.deepseek import chat_completion
 from sandbox.event_bus import event_bus, SandboxEvent
 from sandbox.browser import browser_service
 from sandbox.filesystem import notify_file_change, get_workspace_root
@@ -139,6 +143,18 @@ def _read_positive_int_env(name: str, default: int) -> int:
 
 WIDE_RESEARCH_MAX_ITEMS = _read_positive_int_env("MANUS_WIDE_RESEARCH_MAX_ITEMS", 20)
 WIDE_RESEARCH_MAX_CONCURRENCY = _read_positive_int_env("MANUS_WIDE_RESEARCH_CONCURRENCY", 5)
+SUB_AGENT_MAX_ITEMS = _read_positive_int_env("MANUS_SUBAGENT_MAX_ITEMS", 20)
+SUB_AGENT_MAX_CONCURRENCY = _read_positive_int_env("MANUS_SUBAGENT_CONCURRENCY", 5)
+SUB_AGENT_MAX_ITERATIONS = _read_positive_int_env("MANUS_SUBAGENT_MAX_ITERATIONS", 4)
+SUB_AGENT_MAX_TOOL_RESULT_CHARS = _read_positive_int_env("MANUS_SUBAGENT_MAX_TOOL_RESULT_CHARS", 4000)
+SUB_AGENT_ALLOWED_TOOLS = ["web_search", "read_file", "write_file"]
+
+SUB_AGENT_SYSTEM_PROMPT = (
+    "你是并行任务中的子代理。"
+    "请围绕当前 item 独立完成任务，必要时调用工具。"
+    "优先做事实收集与简洁总结。"
+    "当得到足够信息后，给出结构化结论并停止调用工具。"
+)
 
 
 def _build_sandbox_env(workspace: str) -> Dict[str, str]:
@@ -286,18 +302,271 @@ def _preview_text(text: str, max_chars: int = 220) -> str:
     return one_line[:max_chars] + "..."
 
 
-async def wide_research(query_template: str, items: List[str]) -> str:
-    """
-    并行处理一组同质研究任务。
-    query_template 支持占位符 {item}，例如：\"{item} 公司最新融资进展\"。
-    """
-    cleaned_items = []
+def _clean_string_items(items: List[str]) -> List[str]:
+    cleaned: List[str] = []
     for raw in items:
         if not isinstance(raw, str):
             continue
         value = raw.strip()
         if value:
-            cleaned_items.append(value)
+            cleaned.append(value)
+    return cleaned
+
+
+def _normalize_sub_agent_rel_path(agent_rel_dir: str, raw_path: str) -> str:
+    text = (raw_path or "").strip()
+    if not text:
+        return text
+    if text == ".":
+        return agent_rel_dir
+    if text.startswith("/"):
+        return text
+
+    normalized = text.lstrip("./")
+    prefix = f"{agent_rel_dir}/"
+    if normalized == agent_rel_dir or normalized.startswith(prefix):
+        return normalized
+    return f"{agent_rel_dir}/{normalized}"
+
+
+def _clip_for_sub_agent_context(text: str, max_chars: int = SUB_AGENT_MAX_TOOL_RESULT_CHARS) -> str:
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + f"\n... [子代理上下文截断 {len(text) - max_chars} 字符]"
+
+
+def _serialize_sub_agent_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    序列化子代理消息轨迹，保留角色/文本/工具调用关键信息，
+    并对长内容做裁剪，避免会话轨迹文件过大。
+    """
+    serialized: List[Dict[str, Any]] = []
+    for msg in messages[-20:]:
+        if not isinstance(msg, dict):
+            continue
+        role = str(msg.get("role", "") or "").strip()
+        if not role:
+            continue
+
+        item: Dict[str, Any] = {"role": role}
+        content = msg.get("content")
+        if isinstance(content, str):
+            item["content"] = _clip_for_sub_agent_context(content, max_chars=1600)
+
+        tool_call_id = msg.get("tool_call_id")
+        if isinstance(tool_call_id, str) and tool_call_id:
+            item["tool_call_id"] = tool_call_id
+
+        raw_tool_calls = msg.get("tool_calls")
+        if isinstance(raw_tool_calls, list) and raw_tool_calls:
+            cleaned_tool_calls = []
+            for tc in raw_tool_calls[:3]:
+                if not isinstance(tc, dict):
+                    continue
+                tc_id = str(tc.get("id", "") or "")
+                tc_type = str(tc.get("type", "") or "function")
+                fn = tc.get("function") if isinstance(tc.get("function"), dict) else {}
+                fn_name = str(fn.get("name", "") or "")
+                fn_args = fn.get("arguments", "")
+                if not isinstance(fn_args, str):
+                    fn_args = json.dumps(fn_args, ensure_ascii=False)
+                cleaned_tool_calls.append({
+                    "id": tc_id,
+                    "type": tc_type,
+                    "function": {
+                        "name": fn_name,
+                        "arguments": _clip_for_sub_agent_context(fn_args, max_chars=1200),
+                    },
+                })
+            if cleaned_tool_calls:
+                item["tool_calls"] = cleaned_tool_calls
+
+        serialized.append(item)
+    return serialized
+
+
+async def _run_sub_agent_loop(
+    *,
+    item: str,
+    prompt: str,
+    agent_rel_dir: str,
+    conversation_id: Optional[str],
+) -> Dict[str, Any]:
+    """
+    轻量子代理循环：
+    - 维护独立 messages
+    - 允许少量工具调用
+    - 每轮最多执行 1 个工具动作
+    """
+    messages: List[Dict[str, Any]] = [
+        {"role": "system", "content": SUB_AGENT_SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": (
+                f"item: {item}\n"
+                f"任务: {prompt}\n"
+                f"输出要求: 给出简明结论，并在必要时标注依据。"
+            ),
+        },
+    ]
+
+    iterations = 0
+    tool_steps: List[Dict[str, Any]] = []
+    final_answer = ""
+    status = "completed"
+    error_message = ""
+
+    while iterations < SUB_AGENT_MAX_ITERATIONS:
+        iterations += 1
+        llm_result = await chat_completion(
+            messages=messages,
+            use_tools=True,
+            allowed_tool_names=SUB_AGENT_ALLOWED_TOOLS,
+        )
+
+        content = llm_result.get("content", "") or ""
+        tool_calls = llm_result.get("tool_calls", []) or []
+
+        if not isinstance(tool_calls, list):
+            tool_calls = []
+
+        if not tool_calls:
+            final_answer = content.strip() or "子代理未生成明确结论。"
+            messages.append({"role": "assistant", "content": content})
+            break
+
+        tc_data = tool_calls[0] if isinstance(tool_calls[0], dict) else {}
+        tool_name = str(tc_data.get("name", "") or "").strip()
+        tool_call_id = str(tc_data.get("id", "") or f"sub_agent_tc_{iterations}")
+        raw_args = tc_data.get("arguments", {})
+        args = raw_args if isinstance(raw_args, dict) else {}
+
+        parse_error = tc_data.get("parse_error")
+        if parse_error:
+            status = "failed"
+            error_message = f"子代理工具参数解析失败: {parse_error}"
+            final_answer = error_message
+            tool_steps.append({
+                "step": iterations,
+                "tool": tool_name or "(unknown)",
+                "status": "failed",
+                "error": error_message,
+            })
+            break
+
+        if tool_name not in SUB_AGENT_ALLOWED_TOOLS:
+            status = "failed"
+            error_message = f"子代理请求了未允许工具: {tool_name}"
+            final_answer = error_message
+            tool_steps.append({
+                "step": iterations,
+                "tool": tool_name or "(unknown)",
+                "status": "failed",
+                "error": error_message,
+            })
+            break
+
+        adjusted_args = dict(args)
+        if tool_name in {"read_file", "write_file"}:
+            path_val = adjusted_args.get("path")
+            if isinstance(path_val, str) and path_val.strip():
+                adjusted_args["path"] = _normalize_sub_agent_rel_path(agent_rel_dir, path_val)
+
+        tool_result = await execute_tool(
+            tool_name,
+            adjusted_args,
+            conversation_id=conversation_id,
+        )
+
+        tool_steps.append({
+            "step": iterations,
+            "tool": tool_name,
+            "arguments": adjusted_args,
+            "result_preview": _preview_text(tool_result, max_chars=260),
+        })
+
+        messages.append({
+            "role": "assistant",
+            "content": content,
+            "tool_calls": [
+                {
+                    "id": tool_call_id,
+                    "type": "function",
+                    "function": {
+                        "name": tool_name,
+                        "arguments": json.dumps(adjusted_args, ensure_ascii=False),
+                    },
+                }
+            ],
+        })
+        messages.append({
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "content": _clip_for_sub_agent_context(tool_result),
+        })
+
+    if not final_answer:
+        # 到达迭代上限后，强制关闭工具并产出一次最终结论，避免只有“未完成”提示。
+        final_llm = await chat_completion(
+            messages=messages + [{
+                "role": "user",
+                "content": "请基于已有信息直接给出最终结论，不再调用任何工具。",
+            }],
+            use_tools=False,
+        )
+        fallback_answer = (final_llm.get("content", "") or "").strip()
+        if fallback_answer:
+            status = "completed_with_limit"
+            final_answer = fallback_answer
+        else:
+            status = "max_iterations"
+            final_answer = (
+                f"子代理达到最大迭代轮数（{SUB_AGENT_MAX_ITERATIONS}）仍未形成最终回答。"
+            )
+
+    return {
+        "status": status,
+        "final_answer": final_answer,
+        "iterations": iterations,
+        "tool_steps": tool_steps,
+        "error": error_message,
+        "messages": _serialize_sub_agent_messages(messages),
+    }
+
+
+async def _reduce_sub_agent_results(results: List[Dict[str, Any]], reduce_goal: str) -> str:
+    compact = []
+    for row in results:
+        compact.append({
+            "item": row.get("item"),
+            "status": row.get("status"),
+            "summary": row.get("summary"),
+            "final_answer": row.get("final_answer"),
+        })
+
+    prompt = (
+        "请基于以下子代理结果生成一段精炼的综合结论。"
+        "输出结构：总体结论、关键差异、可执行建议。"
+    )
+    if reduce_goal.strip():
+        prompt += f"\nReduce 目标: {reduce_goal.strip()}"
+
+    llm_result = await chat_completion(
+        messages=[
+            {"role": "user", "content": prompt + "\n\n数据:\n" + json.dumps(compact, ensure_ascii=False)},
+        ],
+        use_tools=False,
+    )
+    content = (llm_result.get("content", "") or "").strip()
+    return content
+
+
+async def wide_research(query_template: str, items: List[str]) -> str:
+    """
+    并行处理一组同质研究任务。
+    query_template 支持占位符 {item}，例如：\"{item} 公司最新融资进展\"。
+    """
+    cleaned_items = _clean_string_items(items)
 
     if not cleaned_items:
         return "wide_research 执行失败: items 不能为空，且必须是字符串数组。"
@@ -381,6 +650,254 @@ async def wide_research(query_template: str, items: List[str]) -> str:
     )
     if truncated:
         notice += f"\n注意: 已按上限裁剪到前 {WIDE_RESEARCH_MAX_ITEMS} 个条目。"
+    return notice
+
+
+# ============ 工具：Spawn Sub Agents（最小多代理骨架）============
+async def spawn_sub_agents(task_template: str, items: List[str], reduce_goal: str = "") -> str:
+    """
+    启动多个轻量子代理并行执行同质任务，并执行 reduce 汇总。
+    每个子代理在独立目录写入 task/observation/result，最终产出汇总文件。
+    """
+    cleaned_items = _clean_string_items(items)
+    if not cleaned_items:
+        return "spawn_sub_agents 执行失败: items 不能为空，且必须是字符串数组。"
+
+    truncated = False
+    if len(cleaned_items) > SUB_AGENT_MAX_ITEMS:
+        cleaned_items = cleaned_items[:SUB_AGENT_MAX_ITEMS]
+        truncated = True
+
+    workspace = _get_workspace()
+    conv_id = _get_current_conversation_id()
+    parent_conversation_id = conv_id or "_default"
+    base_dir = _resolve_workspace_path("multi_agent", workspace)
+    agents_dir = os.path.join(base_dir, "agents")
+    sessions_dir = os.path.join(base_dir, "sessions")
+    os.makedirs(agents_dir, exist_ok=True)
+    os.makedirs(sessions_dir, exist_ok=True)
+
+    semaphore = asyncio.Semaphore(SUB_AGENT_MAX_CONCURRENCY)
+    run_id = f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+
+    async def run_one(index: int, item: str) -> Dict[str, Any]:
+        agent_id = f"{index:03d}_{_slugify_name(item)}"
+        agent_dir = os.path.join(agents_dir, agent_id)
+        os.makedirs(agent_dir, exist_ok=True)
+        agent_rel_dir = _to_workspace_relpath(agent_dir, workspace)
+
+        prompt = (
+            task_template.replace("{item}", item)
+            if "{item}" in task_template
+            else f"{task_template.strip()} {item}".strip()
+        )
+        if not prompt:
+            prompt = item
+
+        task_md_path = os.path.join(agent_dir, "task.md")
+        task_md = (
+            f"# Sub Agent Task\n\n"
+            f"- Agent ID: {agent_id}\n"
+            f"- Item: {item}\n"
+            f"- Created At: {datetime.now().isoformat()}\n\n"
+            "## Prompt\n\n"
+            f"{prompt}\n"
+        )
+        with open(task_md_path, "w", encoding="utf-8") as f:
+            f.write(task_md)
+        await notify_file_change(_to_workspace_relpath(task_md_path, workspace), "created", conv_id)
+
+        try:
+            async with semaphore:
+                loop_result = await _run_sub_agent_loop(
+                    item=item,
+                    prompt=prompt,
+                    agent_rel_dir=agent_rel_dir,
+                    conversation_id=conv_id,
+                )
+        except Exception as exc:
+            loop_result = {
+                "status": "failed",
+                "final_answer": f"子代理执行异常: {str(exc)}",
+                "iterations": 0,
+                "tool_steps": [],
+                "error": str(exc),
+            }
+
+        status = str(loop_result.get("status", "failed"))
+        final_answer = str(loop_result.get("final_answer", "") or "")
+        error = str(loop_result.get("error", "") or "")
+        tool_steps = loop_result.get("tool_steps", [])
+        if not isinstance(tool_steps, list):
+            tool_steps = []
+        session_messages = loop_result.get("messages", [])
+        if not isinstance(session_messages, list):
+            session_messages = []
+        iterations = int(loop_result.get("iterations", 0) or 0)
+
+        observation_path = os.path.join(agent_dir, "observation.md")
+        observation_body = [
+            "# Sub Agent Observation",
+            "",
+            f"- Agent ID: {agent_id}",
+            f"- Item: {item}",
+            f"- Status: {status}",
+            f"- Iterations: {iterations}",
+            "",
+            "## Final Answer",
+            "",
+            final_answer or "(empty)",
+            "",
+            "## Tool Steps",
+            "",
+        ]
+        if tool_steps:
+            for step in tool_steps:
+                observation_body.append(f"- Step {step.get('step')}: {step.get('tool')} -> {step.get('result_preview', step.get('error', ''))}")
+        else:
+            observation_body.append("- (no tool call)")
+
+        if error:
+            observation_body.extend(["", "## Error", "", error])
+
+        with open(observation_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(observation_body) + "\n")
+        await notify_file_change(_to_workspace_relpath(observation_path, workspace), "created", conv_id)
+
+        result = {
+            "agent_id": agent_id,
+            "item": item,
+            "prompt": prompt,
+            "status": status,
+            "iterations": iterations,
+            "summary": _preview_text(final_answer, max_chars=320),
+            "final_answer": final_answer,
+            "observation_path": _to_workspace_relpath(observation_path, workspace),
+        }
+        if tool_steps:
+            result["tool_steps"] = tool_steps
+        if error:
+            result["error"] = error
+
+        session_id = f"sa_{uuid.uuid4().hex[:12]}"
+        session_record = {
+            "id": session_id,
+            "run_id": run_id,
+            "parent_conversation_id": parent_conversation_id,
+            "agent_id": agent_id,
+            "item": item,
+            "prompt": prompt,
+            "workspace": agent_rel_dir,
+            "status": status,
+            "iterations": iterations,
+            "final_answer": final_answer,
+            "tool_steps": tool_steps,
+            "messages": session_messages,
+            "created_at": datetime.now().isoformat(),
+        }
+        if error:
+            session_record["error"] = error
+
+        session_path = os.path.join(sessions_dir, f"{session_id}.json")
+        with open(session_path, "w", encoding="utf-8") as f:
+            f.write(json.dumps(session_record, ensure_ascii=False, indent=2))
+        session_rel_path = _to_workspace_relpath(session_path, workspace)
+        await notify_file_change(session_rel_path, "created", conv_id)
+        result["session_id"] = session_id
+        result["session_path"] = session_rel_path
+
+        result_path = os.path.join(agent_dir, "result.json")
+        with open(result_path, "w", encoding="utf-8") as f:
+            f.write(json.dumps(result, ensure_ascii=False, indent=2))
+        await notify_file_change(_to_workspace_relpath(result_path, workspace), "created", conv_id)
+        return result
+
+    results = await asyncio.gather(
+        *(run_one(i + 1, item) for i, item in enumerate(cleaned_items))
+    )
+
+    reduce_lines = [
+        "# Sub-Agent Reduce Summary",
+        "",
+        f"- Total agents: {len(results)}",
+        f"- Max concurrency: {SUB_AGENT_MAX_CONCURRENCY}",
+    ]
+    if reduce_goal.strip():
+        reduce_lines.append(f"- Reduce goal: {reduce_goal.strip()}")
+    reduce_lines.extend(["", "## Agent Results"])
+
+    for row in results:
+        reduce_lines.append(f"### {row['item']} ({row['status']})")
+        reduce_lines.append(f"- Agent ID: {row['agent_id']}")
+        reduce_lines.append(f"- Prompt: {row['prompt']}")
+        reduce_lines.append(f"- Summary: {row['summary']}")
+        reduce_lines.append(f"- Observation: `{row['observation_path']}`")
+        if row.get("session_path"):
+            reduce_lines.append(f"- Session: `{row['session_path']}`")
+        if row.get("error"):
+            reduce_lines.append(f"- Error: {row['error']}")
+        reduce_lines.append("")
+
+    reduce_llm_summary = ""
+    try:
+        reduce_llm_summary = (await _reduce_sub_agent_results(results, reduce_goal)).strip()
+    except Exception:
+        reduce_llm_summary = ""
+    if reduce_llm_summary:
+        reduce_lines.extend([
+            "## LLM Reduce",
+            "",
+            reduce_llm_summary,
+            "",
+        ])
+
+    reduce_summary_path = os.path.join(base_dir, "reduce_summary.md")
+    with open(reduce_summary_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(reduce_lines))
+    reduce_summary_rel = _to_workspace_relpath(reduce_summary_path, workspace)
+    await notify_file_change(reduce_summary_rel, "modified", conv_id)
+
+    reduce_json_path = os.path.join(base_dir, "reduce_results.json")
+    with open(reduce_json_path, "w", encoding="utf-8") as f:
+        f.write(json.dumps(results, ensure_ascii=False, indent=2))
+    reduce_json_rel = _to_workspace_relpath(reduce_json_path, workspace)
+    await notify_file_change(reduce_json_rel, "modified", conv_id)
+
+    index_payload = {
+        "run_id": run_id,
+        "parent_conversation_id": parent_conversation_id,
+        "created_at": datetime.now().isoformat(),
+        "task_template": task_template,
+        "reduce_goal": reduce_goal,
+        "sub_sessions": [
+            {
+                "session_id": row.get("session_id"),
+                "session_path": row.get("session_path"),
+                "agent_id": row.get("agent_id"),
+                "item": row.get("item"),
+                "status": row.get("status"),
+                "observation_path": row.get("observation_path"),
+            }
+            for row in results
+        ],
+        "reduce_summary_path": reduce_summary_rel,
+        "reduce_results_path": reduce_json_rel,
+    }
+    index_path = os.path.join(base_dir, "sub_agent_index.json")
+    with open(index_path, "w", encoding="utf-8") as f:
+        f.write(json.dumps(index_payload, ensure_ascii=False, indent=2))
+    index_rel = _to_workspace_relpath(index_path, workspace)
+    await notify_file_change(index_rel, "modified", conv_id)
+
+    notice = (
+        "已完成子代理并行执行与汇总。"
+        f"\n子代理目录: {_to_workspace_relpath(agents_dir, workspace)}"
+        f"\n会话索引: {index_rel}"
+        f"\n汇总文件: {reduce_summary_rel}"
+        f"\n结构化结果: {reduce_json_rel}"
+    )
+    if truncated:
+        notice += f"\n注意: 已按上限裁剪到前 {SUB_AGENT_MAX_ITEMS} 个条目。"
     return notice
 
 
@@ -717,6 +1234,22 @@ TOOL_REGISTRY = {
         "usage_hint": (
             '示例: {"query_template": "{item} 公司 2026 最新动态", '
             '"items": ["OpenAI", "Anthropic", "Google DeepMind"]}'
+        ),
+    },
+    "spawn_sub_agents": {
+        "func": spawn_sub_agents,
+        "extract_args": lambda args: {
+            "task_template": args.get("task_template"),
+            "items": args.get("items"),
+            "reduce_goal": args.get("reduce_goal", ""),
+        },
+        "required_keys": ["task_template", "items"],
+        "non_empty_keys": ["task_template"],
+        "string_keys": ["task_template", "reduce_goal"],
+        "list_string_keys": ["items"],
+        "usage_hint": (
+            '示例: {"task_template": "调研 {item} 2026 最新产品与商业动态", '
+            '"items": ["OpenAI", "Anthropic"], "reduce_goal": "对比商业化进展"}'
         ),
     },
     "shell_exec": {
