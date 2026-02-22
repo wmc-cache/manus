@@ -51,6 +51,8 @@ def _read_positive_float_env(name: str, default: float) -> float:
 
 MAX_ITERATIONS = _read_positive_int_env("MANUS_MAX_ITERATIONS", 30)
 PROGRESS_HEARTBEAT_SECONDS = _read_positive_float_env("MANUS_PROGRESS_HEARTBEAT_SECONDS", 2.0)
+TOOL_LOOP_WINDOW = _read_positive_int_env("MANUS_TOOL_LOOP_WINDOW", 8)
+TOOL_LOOP_REPEAT_THRESHOLD = _read_positive_int_env("MANUS_TOOL_LOOP_REPEAT_THRESHOLD", 3)
 DEFAULT_CONVERSATION_STORE = "/tmp/manus_workspace/conversations.json"
 MAX_CONTEXT_MESSAGES = int(os.environ.get("MANUS_MAX_CONTEXT_MESSAGES", "40"))
 MAX_RECENT_MESSAGE_CHARS = int(os.environ.get("MANUS_MAX_RECENT_MESSAGE_CHARS", "4000"))
@@ -399,6 +401,47 @@ class AgentEngine:
             base = high
         return base
 
+    @staticmethod
+    def _build_tool_signature(name: str, arguments: Dict[str, Any]) -> str:
+        try:
+            args_json = json.dumps(arguments or {}, ensure_ascii=False, sort_keys=True)
+        except Exception:
+            args_json = str(arguments)
+        return f"{name}:{args_json}"
+
+    @staticmethod
+    def _is_repeated_tool_signature(history: List[str], signature: str) -> bool:
+        if TOOL_LOOP_REPEAT_THRESHOLD <= 1:
+            return True
+        if len(history) < TOOL_LOOP_REPEAT_THRESHOLD - 1:
+            return False
+        tail = history[-(TOOL_LOOP_REPEAT_THRESHOLD - 1):]
+        return all(item == signature for item in tail)
+
+    @staticmethod
+    def _has_completed_tool_call(conversation: Conversation, tool_name: str) -> bool:
+        for msg in reversed(conversation.messages[-60:]):
+            if msg.role != MessageRole.TOOL:
+                continue
+            for tc in msg.tool_calls:
+                if tc.name == tool_name and tc.status == ToolCallStatus.COMPLETED:
+                    return True
+        return False
+
+    @staticmethod
+    def _has_completed_reduce_summary_read(conversation: Conversation) -> bool:
+        target_suffix = "multi_agent/reduce_summary.md"
+        for msg in reversed(conversation.messages[-60:]):
+            if msg.role != MessageRole.TOOL:
+                continue
+            for tc in msg.tool_calls:
+                if tc.name != "read_file" or tc.status != ToolCallStatus.COMPLETED:
+                    continue
+                path_val = tc.arguments.get("path")
+                if isinstance(path_val, str) and path_val.strip().endswith(target_suffix):
+                    return True
+        return False
+
     def _build_deep_research_instruction(
         self,
         *,
@@ -407,6 +450,8 @@ class AgentEngine:
         max_concurrency: Optional[int],
         max_items: Optional[int],
         max_iterations: Optional[int],
+        spawn_completed: bool,
+        reduce_summary_read_completed: bool,
     ) -> Optional[str]:
         if not enabled:
             return None
@@ -417,12 +462,25 @@ class AgentEngine:
         items = self._clamp_positive_int(max_items, default=20, low=1, high=100)
         iterations = self._clamp_positive_int(max_iterations, default=4, low=1, high=12)
 
+        if not spawn_completed:
+            return (
+                "【运行模式】深度研究（子代理并行）已开启。\n"
+                "请优先调用 spawn_sub_agents 工具，不要改用 wide_research。\n"
+                "你需要从用户请求中提炼 task_template、items、reduce_goal，并立即发起并行。\n"
+                f"调用 spawn_sub_agents 时请显式传入: max_concurrency={concurrency}, max_items={items}, max_iterations={iterations}。\n"
+                "完成后读取 multi_agent/reduce_summary.md 并给出最终结论。"
+            )
+
+        if not reduce_summary_read_completed:
+            return (
+                "深度研究子代理并行已完成。\n"
+                "请读取 `multi_agent/reduce_summary.md` 一次，然后直接输出最终结论。\n"
+                "不要再次调用 spawn_sub_agents。"
+            )
+
         return (
-            "【运行模式】深度研究（子代理并行）已开启。\n"
-            "请优先调用 spawn_sub_agents 工具，不要改用 wide_research。\n"
-            "你需要从用户请求中提炼 task_template、items、reduce_goal，并立即发起并行。\n"
-            f"调用 spawn_sub_agents 时请显式传入: max_concurrency={concurrency}, max_items={items}, max_iterations={iterations}。\n"
-            "完成后读取 multi_agent/reduce_summary.md 并给出最终结论。"
+            "你已经读取过 `multi_agent/reduce_summary.md`。\n"
+            "接下来禁止继续调用工具，请直接输出最终答案。"
         )
 
     async def run_agent_loop(
@@ -491,15 +549,12 @@ class AgentEngine:
         last_invalid_tool_name = ""
         last_invalid_reason = ""
         manual_blocked_notice = ""
-        deep_research_instruction = self._build_deep_research_instruction(
-            user_message=user_message,
-            enabled=deep_research_enabled,
-            max_concurrency=deep_research_max_concurrency,
-            max_items=deep_research_max_items,
-            max_iterations=deep_research_max_iterations,
-        )
+        stop_due_tool_loop = False
+        tool_loop_notice = ""
+        recent_tool_signatures: List[str] = []
         while iteration < MAX_ITERATIONS:
             iteration += 1
+            stop_due_tool_loop = False
 
             # 发送思考状态
             yield {
@@ -512,12 +567,31 @@ class AgentEngine:
 
             # 调用 LLM（根据当前状态动态约束可用工具）
             messages = self._build_messages(conversation)
+            spawn_completed = self._has_completed_tool_call(conversation, "spawn_sub_agents")
+            reduce_summary_read_completed = self._has_completed_reduce_summary_read(conversation)
+            deep_research_instruction = self._build_deep_research_instruction(
+                user_message=user_message,
+                enabled=deep_research_enabled,
+                max_concurrency=deep_research_max_concurrency,
+                max_items=deep_research_max_items,
+                max_iterations=deep_research_max_iterations,
+                spawn_completed=spawn_completed,
+                reduce_summary_read_completed=reduce_summary_read_completed,
+            )
             if deep_research_instruction:
                 messages = messages + [{
                     "role": "user",
                     "content": deep_research_instruction,
                 }]
             allowed_tools = self._get_allowed_tools(conversation)
+            # 深度研究分阶段收敛工具，避免在汇总阶段继续发散调用。
+            if deep_research_enabled:
+                if reduce_summary_read_completed:
+                    allowed_tools = []
+                elif spawn_completed:
+                    allowed_tools = [name for name in allowed_tools if name == "read_file"]
+                else:
+                    allowed_tools = [name for name in allowed_tools if name == "spawn_sub_agents"]
             content = ""
             tool_calls_data: List[Dict[str, Any]] = []
             content_streamed = False
@@ -786,28 +860,45 @@ class AgentEngine:
                     else:
                         # 执行工具（传递 conversation_id 实现会话隔离）
                         try:
-                            tool_task = asyncio.create_task(
-                                execute_tool(tc.name, tc.arguments, conversation_id=conversation.id)
-                            )
-                            while True:
-                                try:
-                                    result = await asyncio.wait_for(
-                                        asyncio.shield(tool_task),
-                                        timeout=PROGRESS_HEARTBEAT_SECONDS,
-                                    )
-                                    break
-                                except asyncio.TimeoutError:
-                                    yield {
-                                        "event": SSEEventType.THINKING,
-                                        "data": json.dumps({
-                                            "iteration": iteration,
-                                            "status": "waiting_tool",
-                                            "tool_name": tc.name,
-                                            "message": f"工具 `{tc.name}` 执行中…",
-                                        }, ensure_ascii=False)
-                                    }
-                            tc.result = result
-                            tc.status = ToolCallStatus.COMPLETED
+                            signature = self._build_tool_signature(tc.name, tc.arguments)
+                            if self._is_repeated_tool_signature(recent_tool_signatures, signature):
+                                result = (
+                                    f"工具执行已阻断: 检测到 `{tc.name}` 连续重复调用，疑似进入死循环。"
+                                    "请基于已有信息直接输出最终结论，不要再次调用同一工具。"
+                                )
+                                tc.result = result
+                                tc.status = ToolCallStatus.FAILED
+                                stop_due_tool_loop = True
+                                tool_loop_notice = (
+                                    "我检测到工具调用进入重复循环，已自动停止重复动作并准备直接给出结论。"
+                                )
+                            else:
+                                recent_tool_signatures.append(signature)
+                                if len(recent_tool_signatures) > TOOL_LOOP_WINDOW:
+                                    recent_tool_signatures = recent_tool_signatures[-TOOL_LOOP_WINDOW:]
+
+                                tool_task = asyncio.create_task(
+                                    execute_tool(tc.name, tc.arguments, conversation_id=conversation.id)
+                                )
+                                while True:
+                                    try:
+                                        result = await asyncio.wait_for(
+                                            asyncio.shield(tool_task),
+                                            timeout=PROGRESS_HEARTBEAT_SECONDS,
+                                        )
+                                        break
+                                    except asyncio.TimeoutError:
+                                        yield {
+                                            "event": SSEEventType.THINKING,
+                                            "data": json.dumps({
+                                                "iteration": iteration,
+                                                "status": "waiting_tool",
+                                                "tool_name": tc.name,
+                                                "message": f"工具 `{tc.name}` 执行中…",
+                                            }, ensure_ascii=False)
+                                        }
+                                tc.result = result
+                                tc.status = ToolCallStatus.COMPLETED
                         except Exception as e:
                             err_text = str(e)
                             result = f"工具执行失败: {err_text}"
@@ -851,6 +942,9 @@ class AgentEngine:
                 self._save_conversations()
 
                 if stop_due_manual_takeover:
+                    break
+
+                if stop_due_tool_loop:
                     break
 
                 # 连续参数错误时停止自动重试，避免空参数死循环
@@ -921,6 +1015,61 @@ class AgentEngine:
                     "event": SSEEventType.CONTENT,
                     "data": json.dumps({
                         "content": invalid_notice,
+                        "type": "final_answer"
+                    }, ensure_ascii=False)
+                }
+                completed = True
+                break
+
+            if stop_due_tool_loop:
+                loop_messages = self._build_messages(conversation) + [{
+                    "role": "user",
+                    "content": (
+                        "检测到你刚才重复调用了同一个工具，已被系统阻断。"
+                        "请不要再调用任何工具，直接基于现有结果给出最终结论。"
+                    ),
+                }]
+                loop_final_resp = await chat_completion(loop_messages, use_tools=False)
+                loop_final = (loop_final_resp.get("content", "") or "").strip()
+                if not loop_final:
+                    loop_final = "检测到工具调用重复循环，已停止自动工具调用。请查看现有结果并继续。"
+                if tool_loop_notice and tool_loop_notice not in loop_final:
+                    loop_final = f"{tool_loop_notice}\n\n{loop_final}"
+
+                conversation.messages.append(
+                    Message(
+                        role=MessageRole.ASSISTANT,
+                        content=loop_final
+                    )
+                )
+
+                finalizing_changed = self._transition_plan_to_finalizing(conversation.plan)
+                plan_changed = self._mark_plan_completed(conversation.plan)
+                conversation.limit_reached = False
+                conversation.continue_message = None
+                self._save_conversations()
+
+                if finalizing_changed and conversation.plan:
+                    yield {
+                        "event": SSEEventType.PLAN_UPDATE,
+                        "data": json.dumps(
+                            self._build_plan_update_payload(conversation, reason="finalizing_tool_loop"),
+                            ensure_ascii=False,
+                        ),
+                    }
+                if plan_changed and conversation.plan:
+                    yield {
+                        "event": SSEEventType.PLAN_UPDATE,
+                        "data": json.dumps(
+                            self._build_plan_update_payload(conversation, reason="completed_tool_loop"),
+                            ensure_ascii=False,
+                        ),
+                    }
+
+                yield {
+                    "event": SSEEventType.CONTENT,
+                    "data": json.dumps({
+                        "content": loop_final,
                         "type": "final_answer"
                     }, ensure_ascii=False)
                 }
