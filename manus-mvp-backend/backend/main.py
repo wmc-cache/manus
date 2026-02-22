@@ -14,7 +14,7 @@ from sse_starlette.sse import EventSourceResponse
 from models.schemas import ChatRequest, SSEEventType
 from agent.core import agent_engine
 from sandbox.event_bus import event_bus, SandboxEvent
-from sandbox.filesystem import get_file_tree, read_file_content, get_workspace_root
+from sandbox.filesystem import get_file_tree, read_file_content, get_workspace_root, delete_workspace
 from sandbox.browser import browser_service
 
 app = FastAPI(
@@ -245,6 +245,42 @@ async def get_conversation(conversation_id: str):
         "manual_takeover_enabled": conv.manual_takeover_enabled,
         "manual_takeover_target": conv.manual_takeover_target,
     }
+
+
+@app.delete("/api/conversations/{conversation_id}")
+async def delete_conversation(conversation_id: str):
+    """删除会话及其运行时资源。"""
+    deleted, reason = await agent_engine.delete_conversation(conversation_id)
+    if not deleted:
+        if reason == "not_found":
+            raise HTTPException(status_code=404, detail="对话不存在")
+        if reason == "busy":
+            raise HTTPException(status_code=409, detail="会话正在执行中，无法删除")
+        raise HTTPException(status_code=500, detail="删除会话失败")
+
+    cleanup_warnings = []
+
+    try:
+        from sandbox.terminal import terminal_manager
+
+        await terminal_manager.close_conversation(conversation_id)
+    except Exception:
+        cleanup_warnings.append("terminal_cleanup_failed")
+
+    try:
+        await browser_service.close(conversation_id=conversation_id)
+    except Exception:
+        cleanup_warnings.append("browser_cleanup_failed")
+
+    try:
+        event_bus.clear_history(conversation_id)
+    except Exception:
+        cleanup_warnings.append("event_history_cleanup_failed")
+
+    if not delete_workspace(conversation_id):
+        cleanup_warnings.append("workspace_cleanup_failed")
+
+    return {"ok": True, "id": conversation_id, "warnings": cleanup_warnings}
 
 
 # ============ 计算机窗口 API（支持会话隔离）============

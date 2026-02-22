@@ -85,6 +85,13 @@ class EventBus:
         all_events.sort(key=lambda e: e.get("timestamp", ""))
         return all_events[-100:]
 
+    def clear_history(self, conversation_id: Optional[str] = None):
+        """清理事件历史。传 conversation_id 仅清理该会话，不传则清空全部。"""
+        if conversation_id:
+            self._history.pop(conversation_id, None)
+            return
+        self._history.clear()
+
 
 # 全局事件总线实例
 event_bus = EventBus()

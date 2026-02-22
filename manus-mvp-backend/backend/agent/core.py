@@ -105,6 +105,23 @@ class AgentEngine:
         self._save_conversations()
         return conv
 
+    async def delete_conversation(self, conversation_id: str) -> tuple[bool, str]:
+        """删除会话。若会话正在执行，返回 busy。"""
+        if conversation_id not in self.conversations:
+            return False, "not_found"
+
+        lock = self.get_conversation_lock(conversation_id)
+        if lock.locked():
+            return False, "busy"
+
+        async with lock:
+            if conversation_id not in self.conversations:
+                return False, "not_found"
+            del self.conversations[conversation_id]
+            self._save_conversations()
+
+        return True, "deleted"
+
     @staticmethod
     def _clip_text(text: str, max_chars: int) -> str:
         if len(text) <= max_chars:

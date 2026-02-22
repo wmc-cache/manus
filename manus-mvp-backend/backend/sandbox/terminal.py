@@ -218,6 +218,19 @@ class TerminalManager:
             await self.sessions[session_id].stop()
             del self.sessions[session_id]
 
+    async def close_conversation(self, conversation_id: str):
+        """关闭指定会话的所有终端会话。"""
+        if not conversation_id:
+            return
+        target_prefix = f"{conversation_id}:"
+        target_ids = [
+            sid
+            for sid, session in self.sessions.items()
+            if session.conversation_id == conversation_id or sid.startswith(target_prefix)
+        ]
+        for session_id in target_ids:
+            await self.close_session(session_id)
+
     async def close_all(self):
         """关闭所有终端会话"""
         for session in list(self.sessions.values()):

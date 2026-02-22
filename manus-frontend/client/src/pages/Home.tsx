@@ -19,6 +19,7 @@ import MessageBubble from "@/components/MessageBubble";
 import ThinkingIndicator from "@/components/ThinkingIndicator";
 import ChatInput from "@/components/ChatInput";
 import ComputerPanel from "@/components/sandbox/ComputerPanel";
+import { toast } from "sonner";
 
 const HERO_BG =
   "https://private-us-east-1.manuscdn.com/sessionFile/wYRFO7o4twJWKVfWlISpqY/sandbox/drOIOkPpOFG7RUVTquZoNi-img-1_1771589325000_na1fn_aGVyby1iZw.png?x-oss-process=image/resize,w_1920,h_1920/format,webp/quality,q_80&Expires=1798761600&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly9wcml2YXRlLXVzLWVhc3QtMS5tYW51c2Nkbi5jb20vc2Vzc2lvbkZpbGUvd1lSRk83bzR0d0pXS1ZmV2xJU3BxWS9zYW5kYm94L2RyT0lPa1BwT0ZHN1JVVlRxdVpvTmktaW1nLTFfMTc3MTU4OTMyNTAwMF9uYTFmbl9hR1Z5YnkxaVp3LnBuZz94LW9zcy1wcm9jZXNzPWltYWdlL3Jlc2l6ZSx3XzE5MjAsaF8xOTIwL2Zvcm1hdCx3ZWJwL3F1YWxpdHkscV84MCIsIkNvbmRpdGlvbiI6eyJEYXRlTGVzc1RoYW4iOnsiQVdTOkVwb2NoVGltZSI6MTc5ODc2MTYwMH19fV19&Key-Pair-Id=K2HSFNDJXOU9YS&Signature=bLV0gYsEmcPgJBG-cXYD2csT3PZ-duS39GcAI3N41yZoT3xOBgXHuzp2BCO2vC8YHdisx~Z11Ihq5Y6e51f2wUIpYhtvEG73mP92xhMxX85lMa~73jqZiqTwagT3gOc2iEtU9l9vbUfrNNWZcgt6KesNAhYIaKGk0dxlEkS4ZnSqHeM~sPF~KntQvY3rprWr51kL-qPnqXn1rWgCbYkgU0tdhSN0oFu2HBnygMIGWtPpmfj5l0Ts0WrD~UmBURNrVIYw8ECC-WRACa84M3G75csooYLAW5F8JpRviklNLneu9iW3oLUUUbQcJqKM57E08UicyQ~SoeVTkaUZGSxIUg__";
@@ -37,6 +38,7 @@ export default function Home() {
     sendMessage,
     loadConversation,
     continueAgent,
+    deleteConversation,
     stopAgent,
     clearMessages,
   } = useAgent();
@@ -63,8 +65,8 @@ export default function Home() {
 
   // 当 conversationId 变化时，切换计算机窗口的订阅
   useEffect(() => {
-    if (conversationId && conversationId !== prevConvIdRef.current) {
-      sandbox.switchConversation(conversationId);
+    if (conversationId !== prevConvIdRef.current) {
+      sandbox.switchConversation(conversationId || null);
       prevConvIdRef.current = conversationId;
     }
   }, [conversationId, sandbox.switchConversation]);
@@ -86,13 +88,28 @@ export default function Home() {
   const handleSelectConversation = useCallback(
     async (id: string) => {
       if (!id || id === conversationId || isLoading) return;
-      const ok = await loadConversation(id);
+      await loadConversation(id);
+    },
+    [conversationId, isLoading, loadConversation]
+  );
+
+  const handleDeleteConversation = useCallback(
+    async (id: string) => {
+      if (!id) return;
+
+      const target = conversations.find((conv) => conv.id === id);
+      const title = target?.title?.trim() || "新对话";
+      const confirmed = window.confirm(`确认删除会话「${title}」？此操作不可恢复。`);
+      if (!confirmed) return;
+
+      const ok = await deleteConversation(id);
       if (ok) {
-        sandbox.switchConversation(id);
-        prevConvIdRef.current = id;
+        toast("会话已删除");
+      } else {
+        toast("删除失败", { description: "请稍后重试。" });
       }
     },
-    [conversationId, isLoading, loadConversation, sandbox.switchConversation]
+    [conversations, deleteConversation]
   );
 
   const hasMessages = messages.length > 0;
@@ -120,6 +137,7 @@ export default function Home() {
               conversations={conversations}
               activeConversationId={conversationId}
               onSelectConversation={handleSelectConversation}
+              onDeleteConversation={handleDeleteConversation}
             />
           )}
         </AnimatePresence>

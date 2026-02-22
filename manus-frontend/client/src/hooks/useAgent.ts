@@ -599,6 +599,91 @@ export function useAgent() {
     });
   }, [sendMessage, state.isLoading, state.conversationId]);
 
+  const deleteConversation = useCallback(async (conversationId: string): Promise<boolean> => {
+    const targetId = (conversationId || "").trim();
+    if (!targetId) return false;
+
+    const deletingActive = state.conversationId === targetId;
+    if (deletingActive && state.isLoading) {
+      setState((prev) => ({
+        ...prev,
+        error: "当前会话正在执行中，无法删除",
+      }));
+      return false;
+    }
+
+    try {
+      const response = await fetch(`${API_BASE}/api/conversations/${targetId}`, {
+        method: "DELETE",
+        headers: buildAuthHeaders(),
+      });
+
+      if (!response.ok) {
+        let message = `HTTP ${response.status}: ${response.statusText}`;
+        try {
+          const errorPayload = (await response.json()) as { detail?: string };
+          if (errorPayload?.detail) {
+            message = errorPayload.detail;
+          }
+        } catch {
+          // ignore parse error
+        }
+        throw new Error(message);
+      }
+
+      delete interruptedConversationRef.current[targetId];
+      delete awaitingResumeConversationRef.current[targetId];
+      delete resumePendingConversationRef.current[targetId];
+      delete messageCountConversationRef.current[targetId];
+
+      const pendingMarker = readPendingExecutionMarker();
+      if (pendingMarker && pendingMarker.conversationId === targetId) {
+        clearPendingExecutionMarker();
+      }
+      if (safeGetLocalStorage(ACTIVE_CONVERSATION_STORAGE_KEY) === targetId) {
+        safeRemoveLocalStorage(ACTIVE_CONVERSATION_STORAGE_KEY);
+      }
+
+      const conversations = await fetchConversations();
+      if (!deletingActive) {
+        setState((prev) => ({
+          ...prev,
+          error: null,
+        }));
+        return true;
+      }
+
+      safeRemoveLocalStorage(AUTOLOAD_LATEST_ONCE_KEY);
+
+      if (conversations.length > 0) {
+        const loaded = await loadConversation(conversations[0].id);
+        if (loaded) {
+          return true;
+        }
+      }
+
+      setState((prev) => ({
+        ...prev,
+        messages: [],
+        isLoading: false,
+        isThinking: false,
+        currentToolCall: null,
+        conversationId: null,
+        error: null,
+        iteration: 0,
+        limitReached: false,
+        continueMessage: null,
+      }));
+      return true;
+    } catch (err) {
+      setState((prev) => ({
+        ...prev,
+        error: err instanceof Error ? err.message : "删除会话失败",
+      }));
+      return false;
+    }
+  }, [fetchConversations, loadConversation, state.conversationId, state.isLoading]);
+
   const clearMessages = useCallback(() => {
     safeRemoveLocalStorage(ACTIVE_CONVERSATION_STORAGE_KEY);
     safeRemoveLocalStorage(AUTOLOAD_LATEST_ONCE_KEY);
@@ -713,6 +798,7 @@ export function useAgent() {
     ...state,
     sendMessage,
     continueAgent,
+    deleteConversation,
     fetchConversations,
     loadConversation,
     stopAgent,

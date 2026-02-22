@@ -7,6 +7,7 @@ import {
   Plus,
   MessageSquare,
   Settings,
+  Trash2,
   Zap,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -18,6 +19,7 @@ interface SidebarProps {
   conversations: Conversation[];
   activeConversationId: string | null;
   onSelectConversation?: (id: string) => void;
+  onDeleteConversation?: (id: string) => void;
   isCollapsed?: boolean;
 }
 
@@ -37,6 +39,7 @@ export default function Sidebar({
   conversations,
   activeConversationId,
   onSelectConversation,
+  onDeleteConversation,
   isCollapsed,
 }: SidebarProps) {
   if (isCollapsed) return null;
@@ -90,25 +93,42 @@ export default function Sidebar({
             {conversations.map((conv) => {
               const active = conv.id === activeConversationId;
               return (
-                <button
-                  key={conv.id}
-                  onClick={() => onSelectConversation?.(conv.id)}
-                  className={`w-full text-left px-2.5 py-2 rounded-lg border transition-colors ${
-                    active
-                      ? "bg-primary/10 border-primary/30"
-                      : "bg-transparent border-transparent hover:bg-accent/40"
-                  }`}
-                >
-                  <div className="flex items-center gap-2">
-                    <MessageSquare className={`w-3.5 h-3.5 ${active ? "text-primary" : "text-muted-foreground/70"}`} />
-                    <span className={`text-xs truncate ${active ? "text-foreground" : "text-foreground/90"}`}>
-                      {conv.title || "新对话"}
-                    </span>
-                  </div>
-                  <div className="text-[10px] mt-1 pl-[22px] text-muted-foreground/60">
-                    {formatConversationMeta(conv)}
-                  </div>
-                </button>
+                <div key={conv.id} className="group relative">
+                  <button
+                    onClick={() => onSelectConversation?.(conv.id)}
+                    className={`w-full text-left px-2.5 py-2 pr-9 rounded-lg border transition-colors ${
+                      active
+                        ? "bg-primary/10 border-primary/30"
+                        : "bg-transparent border-transparent hover:bg-accent/40"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <MessageSquare className={`w-3.5 h-3.5 ${active ? "text-primary" : "text-muted-foreground/70"}`} />
+                      <span className={`text-xs truncate ${active ? "text-foreground" : "text-foreground/90"}`}>
+                        {conv.title || "新对话"}
+                      </span>
+                    </div>
+                    <div className="text-[10px] mt-1 pl-[22px] text-muted-foreground/60">
+                      {formatConversationMeta(conv)}
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onDeleteConversation?.(conv.id);
+                    }}
+                    className={`absolute right-2 top-2 p-1 rounded-md transition-colors ${
+                      active
+                        ? "text-muted-foreground/90 hover:text-destructive hover:bg-destructive/10"
+                        : "text-muted-foreground/0 group-hover:text-muted-foreground/80 hover:text-destructive hover:bg-destructive/10"
+                    }`}
+                    title="删除会话"
+                    aria-label="删除会话"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               );
             })}
           </div>

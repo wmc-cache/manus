@@ -1,5 +1,6 @@
 """文件系统服务 - 文件树和内容管理（支持会话隔离）"""
 import os
+import shutil
 import mimetypes
 import re
 from pathlib import Path
@@ -215,3 +216,20 @@ async def notify_file_change(path: str, action: str = "modified", conversation_i
         window_id="files",
         conversation_id=conversation_id,
     ))
+
+
+def delete_workspace(conversation_id: Optional[str]) -> bool:
+    """删除指定会话的工作目录。"""
+    cid = _normalize_conversation_id(conversation_id)
+    if not cid:
+        return False
+
+    root = Path(WORKSPACE_BASE).resolve() / cid
+    if not root.exists():
+        return True
+
+    try:
+        shutil.rmtree(root)
+        return True
+    except Exception:
+        return False
