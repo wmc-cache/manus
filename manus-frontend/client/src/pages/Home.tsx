@@ -9,7 +9,7 @@
  */
 import { useRef, useEffect, useState, useCallback } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { PanelLeftClose, PanelLeft, Monitor, PanelRightClose } from "lucide-react";
+import { PanelLeftClose, PanelLeft, Monitor, Maximize2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useAgent } from "@/hooks/useAgent";
@@ -45,6 +45,7 @@ const DEFAULT_DEEP_RESEARCH_SETTINGS: DeepResearchSettingsData = {
   maxItems: 20,
   maxIterations: 4,
 };
+const PREVIEW_SCALE = 0.6;
 
 function clampInt(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
@@ -98,7 +99,7 @@ export default function Home() {
   const sandbox = useSandbox();
 
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [computerOpen, setComputerOpen] = useState(true);
+  const [computerOpen, setComputerOpen] = useState(false);
   const [deepResearchSettings, setDeepResearchSettings] = useState<DeepResearchSettingsData>(DEFAULT_DEEP_RESEARCH_SETTINGS);
   const [subAgentDialogOpen, setSubAgentDialogOpen] = useState(false);
   const [subAgentSessionLoading, setSubAgentSessionLoading] = useState(false);
@@ -124,13 +125,6 @@ export default function Home() {
       // ignore storage failures
     }
   }, [deepResearchSettings]);
-
-  // 当 Agent 开始工作时自动打开计算机窗口
-  useEffect(() => {
-    if (isLoading) {
-      setComputerOpen(true);
-    }
-  }, [isLoading]);
 
   // 当 conversationId 变化时，切换计算机窗口的订阅
   useEffect(() => {
@@ -233,6 +227,7 @@ export default function Home() {
 
   const hasMessages = messages.length > 0;
   const manualTakeoverActive = sandbox.manualTakeoverEnabled;
+  const previewWindow = "browser";
 
   return (
     <div
@@ -264,7 +259,7 @@ export default function Home() {
         </AnimatePresence>
 
         {/* 主内容区 - 对话 */}
-        <main className="flex-1 flex flex-col h-full min-w-0">
+        <main className="relative flex-1 flex flex-col h-full min-w-0">
           {/* 顶部栏 */}
           <header className="flex items-center justify-between px-4 py-3 border-b border-border/30">
             <div className="flex items-center gap-2">
@@ -297,33 +292,69 @@ export default function Home() {
               )}
             </div>
 
-            {/* 计算机窗口切换按钮 */}
-            <Button
-              variant="ghost"
-              size="sm"
-              className={`gap-1.5 text-xs ${
-                computerOpen
-                  ? "text-primary"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-              onClick={() => setComputerOpen(!computerOpen)}
-            >
-              {computerOpen ? (
-                <PanelRightClose className="w-4 h-4" />
-              ) : (
-                <Monitor className="w-4 h-4" />
-              )}
-              <span className="hidden sm:inline">
-                {computerOpen ? "收起" : "计算机"}
-              </span>
-              {/* 连接状态点 */}
+            <div className="hidden sm:flex items-center gap-2 text-xs text-muted-foreground">
+              <Monitor className="w-3.5 h-3.5" />
+              <span>计算机预览</span>
               <div
                 className={`w-1.5 h-1.5 rounded-full ${
                   sandbox.connected ? "bg-emerald-400" : "bg-red-400"
                 }`}
               />
-            </Button>
+            </div>
           </header>
+
+          {!computerOpen && (
+            <div className="absolute right-4 top-16 z-20 h-[200px] w-[300px] sm:h-[220px] sm:w-[330px] overflow-hidden rounded-xl border border-border/30 bg-background/40 shadow-[0_12px_30px_rgba(0,0,0,0.35)]">
+              <div
+                className="pointer-events-none h-full"
+                style={{
+                  transform: `scale(${PREVIEW_SCALE})`,
+                  transformOrigin: "top left",
+                  width: `${100 / PREVIEW_SCALE}%`,
+                  height: `${100 / PREVIEW_SCALE}%`,
+                }}
+              >
+                <ComputerPanel
+                  connected={sandbox.connected}
+                  activeWindow={previewWindow}
+                  onWindowChange={() => {}}
+                  terminalOutput={sandbox.terminalOutput}
+                  onTerminalInput={sandbox.sendTerminalInput}
+                  browserData={sandbox.browserData}
+                  editorFile={sandbox.editorFile}
+                  fileTree={sandbox.fileTree}
+                  onFileClick={sandbox.fetchFileContent}
+                  onRefreshFiles={sandbox.fetchFileTree}
+                  manualTakeoverEnabled={sandbox.manualTakeoverEnabled}
+                  manualTakeoverTarget={sandbox.manualTakeoverTarget}
+                  onToggleManualTakeover={sandbox.setManualTakeover}
+                  onBrowserClick={sandbox.browserClick}
+                  onBrowserType={sandbox.browserType}
+                  onBrowserScroll={sandbox.browserScroll}
+                  onBrowserKey={sandbox.browserKey}
+                  browserInteractionError={sandbox.browserInteractionError}
+                />
+              </div>
+
+              <div className="absolute inset-0 bg-gradient-to-b from-transparent to-black/18 pointer-events-none" />
+              <Button
+                variant="ghost"
+                size="icon"
+                className="absolute right-2 top-2 h-6 w-6 bg-black/35 text-white/80 hover:bg-black/55 hover:text-white"
+                onClick={() => setComputerOpen(true)}
+                title="展开计算机面板"
+              >
+                <Maximize2 className="w-3.5 h-3.5" />
+              </Button>
+              <button
+                type="button"
+                className="absolute inset-0"
+                onClick={() => setComputerOpen(true)}
+                title="打开计算机面板"
+                aria-label="打开计算机面板"
+              />
+            </div>
+          )}
 
           {/* 消息区域 */}
           <div className="flex-1 overflow-y-auto">
@@ -464,7 +495,7 @@ export default function Home() {
           {manualTakeoverActive && (
             <div className="mx-auto w-full max-w-3xl px-4">
               <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
-                当前为手动接管模式，Agent 自动工具调用会暂停。完成后请在右侧点击“接管中”释放接管，再继续让 Agent 执行。
+                当前为手动接管模式，Agent 自动工具调用会暂停。完成后请在计算机窗口点击“接管中”释放接管，再继续让 Agent 执行。
               </div>
             </div>
           )}
@@ -585,7 +616,7 @@ export default function Home() {
           </Dialog>
         </main>
 
-        {/* 计算机窗口面板 */}
+        {/* 计算机窗口面板（预览点击后展开为右侧分栏） */}
         <AnimatePresence>
           {computerOpen && (
             <motion.div
