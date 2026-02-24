@@ -90,14 +90,46 @@ class Planner:
 
     def create_template_plan(self, user_message: str) -> TaskPlan:
         """Create a plan using templates (fallback when LLM is unavailable)."""
+        msg = user_message.strip().lower()
         complexity = self.estimate_complexity(user_message)
         goal = user_message.strip() or "完成用户请求"
         if len(goal) > 180:
             goal = goal[:180] + "..."
 
-        if complexity == "simple":
+        search_like = any(token in msg for token in ["搜索", "检索", "查找", "调研", "research", "search", "latest"])
+        coding_like = any(token in msg for token in ["代码", "修复", "bug", "实现", "开发", "api", "refactor", "test"])
+        writing_like = any(token in msg for token in ["总结", "报告", "文档", "写作", "润色", "summary", "report", "write"])
+        data_like = any(token in msg for token in ["数据", "分析", "统计", "图表", "csv", "sql", "pandas", "analysis"])
+
+        if search_like:
             phases = [
-                PlanPhase(id=1, title="理解需求并执行", status=PlanPhaseStatus.RUNNING),
+                PlanPhase(id=1, title="明确检索范围与关键词", status=PlanPhaseStatus.RUNNING),
+                PlanPhase(id=2, title="检索并筛选可信来源", status=PlanPhaseStatus.PENDING),
+                PlanPhase(id=3, title="提炼要点并整理结论", status=PlanPhaseStatus.PENDING),
+            ]
+        elif coding_like:
+            phases = [
+                PlanPhase(id=1, title="确认需求与约束", status=PlanPhaseStatus.RUNNING),
+                PlanPhase(id=2, title="设计实现方案", status=PlanPhaseStatus.PENDING),
+                PlanPhase(id=3, title="修改代码并验证", status=PlanPhaseStatus.PENDING),
+                PlanPhase(id=4, title="整理变更并交付", status=PlanPhaseStatus.PENDING),
+            ]
+        elif data_like:
+            phases = [
+                PlanPhase(id=1, title="明确分析目标与口径", status=PlanPhaseStatus.RUNNING),
+                PlanPhase(id=2, title="采集并清洗数据", status=PlanPhaseStatus.PENDING),
+                PlanPhase(id=3, title="完成分析与可视化", status=PlanPhaseStatus.PENDING),
+                PlanPhase(id=4, title="解释结果并给建议", status=PlanPhaseStatus.PENDING),
+            ]
+        elif writing_like:
+            phases = [
+                PlanPhase(id=1, title="梳理受众与输出目标", status=PlanPhaseStatus.RUNNING),
+                PlanPhase(id=2, title="搭建结构并起草内容", status=PlanPhaseStatus.PENDING),
+                PlanPhase(id=3, title="润色校对并交付", status=PlanPhaseStatus.PENDING),
+            ]
+        elif complexity == "simple":
+            phases = [
+                PlanPhase(id=1, title="确认需求并执行", status=PlanPhaseStatus.RUNNING),
                 PlanPhase(id=2, title="整理结果并回复", status=PlanPhaseStatus.PENDING),
             ]
         elif complexity == "complex":
@@ -134,19 +166,26 @@ class Planner:
             if not plan_data:
                 return None
 
-            goal = plan_data.get("goal", user_message[:180])
+            goal = str(plan_data.get("goal", user_message[:180])).strip() or (user_message[:180] or "完成用户请求")
             raw_phases = plan_data.get("phases", [])
-            if not raw_phases or len(raw_phases) < 2:
+            if not isinstance(raw_phases, list) or len(raw_phases) < 2:
                 return None
 
-            phases = []
-            for i, p in enumerate(raw_phases):
+            phases: List[PlanPhase] = []
+            for i, p in enumerate(raw_phases[:8]):
+                if not isinstance(p, dict):
+                    continue
+                title = str(p.get("title", f"阶段 {i + 1}")).strip()[:40]
+                if not title:
+                    title = f"阶段 {i + 1}"
                 status = PlanPhaseStatus.RUNNING if i == 0 else PlanPhaseStatus.PENDING
                 phases.append(PlanPhase(
-                    id=p.get("id", i + 1),
-                    title=str(p.get("title", f"阶段 {i + 1}"))[:40],
+                    id=i + 1,
+                    title=title,
                     status=status,
                 ))
+            if len(phases) < 2:
+                return None
 
             return TaskPlan(goal=goal, phases=phases, current_phase_id=1)
 
@@ -157,12 +196,9 @@ class Planner:
     async def create_plan(self, user_message: str, use_llm: bool = True) -> TaskPlan:
         """Create a plan, trying LLM first then falling back to template."""
         if use_llm and self._llm_func:
-            complexity = self.estimate_complexity(user_message)
-            # Only use LLM for complex tasks to save API calls
-            if complexity in ("complex", "medium"):
-                llm_plan = await self.create_plan_with_llm(user_message)
-                if llm_plan:
-                    return llm_plan
+            llm_plan = await self.create_plan_with_llm(user_message)
+            if llm_plan:
+                return llm_plan
 
         return self.create_template_plan(user_message)
 

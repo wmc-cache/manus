@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import AsyncGenerator, Dict, Any, List, Optional
 
 from agent.context_manager import build_default_context_manager, ToolStateMachine
+from agent.planner import Planner
 from agent.tools import execute_tool
 from llm.deepseek import chat_completion, chat_completion_stream
 from models.schemas import (
@@ -17,7 +18,6 @@ from models.schemas import (
     ToolCall,
     ToolCallStatus,
     TaskPlan,
-    PlanPhase,
     PlanPhaseStatus,
 )
 from sandbox.event_bus import event_bus, SandboxEvent
@@ -49,10 +49,22 @@ def _read_positive_float_env(name: str, default: float) -> float:
         return default
 
 
+def _read_bool_env(name: str, default: bool) -> bool:
+    raw = os.environ.get(name, "").strip().lower()
+    if not raw:
+        return default
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
 MAX_ITERATIONS = _read_positive_int_env("MANUS_MAX_ITERATIONS", 30)
 PROGRESS_HEARTBEAT_SECONDS = _read_positive_float_env("MANUS_PROGRESS_HEARTBEAT_SECONDS", 2.0)
 TOOL_LOOP_WINDOW = _read_positive_int_env("MANUS_TOOL_LOOP_WINDOW", 8)
 TOOL_LOOP_REPEAT_THRESHOLD = _read_positive_int_env("MANUS_TOOL_LOOP_REPEAT_THRESHOLD", 3)
+PLAN_USE_LLM = _read_bool_env("MANUS_PLAN_USE_LLM", True)
 DEFAULT_CONVERSATION_STORE = "/tmp/manus_workspace/conversations.json"
 MAX_CONTEXT_MESSAGES = int(os.environ.get("MANUS_MAX_CONTEXT_MESSAGES", "40"))
 MAX_RECENT_MESSAGE_CHARS = int(os.environ.get("MANUS_MAX_RECENT_MESSAGE_CHARS", "4000"))
@@ -94,6 +106,8 @@ class AgentEngine:
             max_recent_message_chars=MAX_RECENT_MESSAGE_CHARS,
             max_old_message_chars=MAX_OLD_MESSAGE_CHARS,
         )
+        self._planner = Planner(llm_func=chat_completion)
+        self._plan_use_llm = PLAN_USE_LLM
         self._tool_state_machine = ToolStateMachine()
         self._load_conversations()
 
@@ -249,29 +263,28 @@ class AgentEngine:
                 payload["todo_path"] = todo_path
         return payload
 
-    def _create_default_plan(self, user_message: str) -> TaskPlan:
-        goal = user_message.strip() or "完成用户请求"
-        if len(goal) > 180:
-            goal = goal[:180] + "..."
-        phases = [
-            PlanPhase(id=1, title="理解需求并确认执行路径", status=PlanPhaseStatus.RUNNING),
-            PlanPhase(id=2, title="调用工具逐步完成任务", status=PlanPhaseStatus.PENDING),
-            PlanPhase(id=3, title="整理结果并给出最终回复", status=PlanPhaseStatus.PENDING),
-        ]
-        return TaskPlan(goal=goal, phases=phases, current_phase_id=1)
+    async def _create_plan_for_turn(self, user_message: str) -> TaskPlan:
+        try:
+            return await self._planner.create_plan(
+                user_message=user_message,
+                use_llm=self._plan_use_llm,
+            )
+        except Exception as exc:
+            logger.warning("Plan creation failed, fallback to template: %s", exc)
+            return self._planner.create_template_plan(user_message)
 
     @staticmethod
     def _is_continue_message(user_message: str) -> bool:
         return user_message.strip().lower() in CONTINUE_MESSAGES
 
-    def _ensure_plan_for_turn(self, conversation: Conversation, user_message: str) -> str:
+    async def _ensure_plan_for_turn(self, conversation: Conversation, user_message: str) -> str:
         if conversation.plan is None or not self._is_continue_message(user_message):
-            conversation.plan = self._create_default_plan(user_message)
+            conversation.plan = await self._create_plan_for_turn(user_message)
             return "initialized"
 
         plan = conversation.plan
         if not plan.phases:
-            conversation.plan = self._create_default_plan(user_message)
+            conversation.plan = await self._create_plan_for_turn(user_message)
             return "initialized"
 
         # 若无运行阶段，则继续当前未完成阶段
@@ -282,28 +295,63 @@ class AgentEngine:
                 pending.status = PlanPhaseStatus.RUNNING
                 plan.current_phase_id = pending.id
             else:
-                # 已全部完成，继续时重开执行阶段
-                exec_phase = next((p for p in plan.phases if p.id == 2), None)
-                if exec_phase:
-                    exec_phase.status = PlanPhaseStatus.RUNNING
-                    plan.current_phase_id = exec_phase.id
+                # 已全部完成时，继续会话则重开最后阶段
+                last_phase = plan.phases[-1]
+                last_phase.status = PlanPhaseStatus.RUNNING
+                plan.current_phase_id = last_phase.id
+        elif plan.current_phase_id != running_phase.id:
+            plan.current_phase_id = running_phase.id
         return "resumed"
 
     @staticmethod
     def _transition_plan_to_execution(plan: Optional[TaskPlan]) -> bool:
-        if not plan:
+        if not plan or not plan.phases:
             return False
+
         changed = False
-        phase1 = next((p for p in plan.phases if p.id == 1), None)
-        phase2 = next((p for p in plan.phases if p.id == 2), None)
-        if phase1 and phase1.status != PlanPhaseStatus.COMPLETED:
-            phase1.status = PlanPhaseStatus.COMPLETED
+        phases = plan.phases
+        running_idx = next(
+            (idx for idx, phase in enumerate(phases) if phase.status == PlanPhaseStatus.RUNNING),
+            None,
+        )
+
+        if running_idx is None:
+            next_idx = next(
+                (idx for idx, phase in enumerate(phases) if phase.status in {PlanPhaseStatus.PENDING, PlanPhaseStatus.FAILED}),
+                None,
+            )
+            if next_idx is None:
+                return False
+            phases[next_idx].status = PlanPhaseStatus.RUNNING
+            if plan.current_phase_id != phases[next_idx].id:
+                plan.current_phase_id = phases[next_idx].id
+            return True
+
+        # 仅在第一阶段时推进到下一阶段；避免每轮工具调用都跳阶段。
+        if running_idx != 0:
+            if plan.current_phase_id != phases[running_idx].id:
+                plan.current_phase_id = phases[running_idx].id
+                changed = True
+            return changed
+
+        next_idx = next(
+            (idx for idx, phase in enumerate(phases[1:], start=1) if phase.status in {PlanPhaseStatus.PENDING, PlanPhaseStatus.FAILED}),
+            None,
+        )
+        if next_idx is None:
+            if plan.current_phase_id != phases[running_idx].id:
+                plan.current_phase_id = phases[running_idx].id
+                changed = True
+            return changed
+
+        if phases[running_idx].status != PlanPhaseStatus.COMPLETED:
+            phases[running_idx].status = PlanPhaseStatus.COMPLETED
             changed = True
-        if phase2 and phase2.status != PlanPhaseStatus.RUNNING:
-            phase2.status = PlanPhaseStatus.RUNNING
+        if phases[next_idx].status != PlanPhaseStatus.RUNNING:
+            phases[next_idx].status = PlanPhaseStatus.RUNNING
             changed = True
-        if phase2 and plan.current_phase_id != phase2.id:
-            plan.current_phase_id = phase2.id
+        if plan.current_phase_id != phases[next_idx].id:
+            plan.current_phase_id = phases[next_idx].id
             changed = True
         return changed
 
@@ -325,23 +373,23 @@ class AgentEngine:
 
     @staticmethod
     def _transition_plan_to_finalizing(plan: Optional[TaskPlan]) -> bool:
-        if not plan:
+        if not plan or not plan.phases:
             return False
 
         changed = False
-        phase2 = next((p for p in plan.phases if p.id == 2), None)
-        phase3 = next((p for p in plan.phases if p.id == 3), None)
+        final_phase = plan.phases[-1]
 
-        if phase2 and phase2.status != PlanPhaseStatus.COMPLETED:
-            phase2.status = PlanPhaseStatus.COMPLETED
+        for phase in plan.phases[:-1]:
+            if phase.status != PlanPhaseStatus.COMPLETED:
+                phase.status = PlanPhaseStatus.COMPLETED
+                changed = True
+
+        if final_phase.status != PlanPhaseStatus.RUNNING:
+            final_phase.status = PlanPhaseStatus.RUNNING
             changed = True
 
-        if phase3 and phase3.status != PlanPhaseStatus.RUNNING:
-            phase3.status = PlanPhaseStatus.RUNNING
-            changed = True
-
-        if phase3 and plan.current_phase_id != phase3.id:
-            plan.current_phase_id = phase3.id
+        if plan.current_phase_id != final_phase.id:
+            plan.current_phase_id = final_phase.id
             changed = True
 
         return changed
@@ -521,7 +569,7 @@ class AgentEngine:
         conversation.continue_message = None
 
         # 更新计划（初始化或恢复）
-        plan_reason = self._ensure_plan_for_turn(conversation, user_message)
+        plan_reason = await self._ensure_plan_for_turn(conversation, user_message)
 
         # 如果是第一条真实用户消息，设置对话标题
         if record_user_message and len(conversation.messages) == 1:
