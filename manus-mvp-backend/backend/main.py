@@ -35,12 +35,17 @@ _origins_raw = os.environ.get(
 _allow_origins = [item.strip() for item in _origins_raw.split(",") if item.strip()]
 if not _allow_origins:
     _allow_origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
+_allow_origin_regex = os.environ.get(
+    "MANUS_ALLOWED_ORIGIN_REGEX",
+    r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+).strip() or None
 _allow_credentials = "*" not in _allow_origins
 
 # CORS 配置
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allow_origins,
+    allow_origin_regex=None if "*" in _allow_origins else _allow_origin_regex,
     allow_credentials=_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],

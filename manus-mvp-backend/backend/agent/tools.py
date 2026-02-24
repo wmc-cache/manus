@@ -17,6 +17,23 @@ from sandbox.event_bus import event_bus, SandboxEvent
 from sandbox.browser import browser_service
 from sandbox.filesystem import notify_file_change, get_workspace_root
 
+# Import extended tools
+try:
+    from agent.tools_extended import (
+        browser_click as _ext_browser_click,
+        browser_input as _ext_browser_input,
+        browser_scroll as _ext_browser_scroll,
+        edit_file as _ext_edit_file,
+        append_file as _ext_append_file,
+        list_files as _ext_list_files,
+        data_analysis as _ext_data_analysis,
+        EXTENDED_TOOL_REGISTRY,
+    )
+    _EXTENDED_TOOLS_AVAILABLE = True
+except ImportError:
+    _EXTENDED_TOOLS_AVAILABLE = False
+    EXTENDED_TOOL_REGISTRY = {}
+
 # 当前执行上下文中的 conversation_id（由 execute_tool 设置，支持并发隔离）
 _current_conversation_id: ContextVar[Optional[str]] = ContextVar(
     "current_conversation_id",
@@ -1366,6 +1383,13 @@ TOOL_REGISTRY = {
         "usage_hint": '示例: {"path": "report.md", "content": "# 报告"}',
     },
 }
+
+
+# Merge extended tools into registry
+if _EXTENDED_TOOLS_AVAILABLE:
+    for _ext_name, _ext_config in EXTENDED_TOOL_REGISTRY.items():
+        if _ext_name not in TOOL_REGISTRY:
+            TOOL_REGISTRY[_ext_name] = _ext_config
 
 
 async def execute_tool(name: str, arguments: Dict[str, Any], conversation_id: Optional[str] = None) -> str:

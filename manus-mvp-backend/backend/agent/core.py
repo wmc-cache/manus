@@ -68,8 +68,15 @@ DEFAULT_TOOL_NAMES = [
     "browser_navigate",
     "browser_screenshot",
     "browser_get_content",
+    "browser_click",
+    "browser_input",
+    "browser_scroll",
     "read_file",
     "write_file",
+    "edit_file",
+    "append_file",
+    "list_files",
+    "data_analysis",
 ]
 
 
