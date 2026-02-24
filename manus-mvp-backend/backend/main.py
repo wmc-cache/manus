@@ -4,8 +4,17 @@ import sys
 import os
 import asyncio
 import re
+import logging
 from datetime import datetime
 from pathlib import Path
+
+# 配置日志，确保自定义 logger 的输出可见
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(name)s %(levelname)s %(message)s",
+    stream=sys.stderr,
+    force=True,
+)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -147,6 +156,12 @@ async def health_check():
 @app.post("/api/chat")
 async def chat(request: ChatRequest):
     """发送消息并获取 Agent 响应（SSE 流式）"""
+    import logging as _logging
+    _chat_logger = _logging.getLogger("main.chat")
+    _chat_logger.info(
+        "[ChatAPI] Received: message=%s, deep_research_enabled=%s, conversation_id=%s",
+        request.message[:60], request.deep_research_enabled, request.conversation_id
+    )
     if not request.message.strip():
         raise HTTPException(status_code=400, detail="消息不能为空")
 

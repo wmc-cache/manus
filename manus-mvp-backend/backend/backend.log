@@ -1,0 +1,109 @@
+INFO:     Started server process [5347]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     10.111.46.1:44758 - "WebSocket /ws/sandbox" [accepted]
+INFO:     connection open
+INFO:     10.111.46.1:44768 - "GET /api/sandbox/files?conversation_id=fb399f25-d115-4022-80c6-a76eb9eae5cc HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59978 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     10.111.46.1:44772 - "GET /api/sandbox/files HTTP/1.1" 200 OK
+INFO:     10.111.46.1:39350 - "POST /api/chat HTTP/1.1" 200 OK
+INFO:     10.111.46.1:41394 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:47468 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:47480 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     connection closed
+INFO:     10.111.46.1:56530 - "WebSocket /ws/sandbox" [accepted]
+INFO:     connection open
+INFO:     10.111.46.1:56540 - "GET /api/conversations HTTP/1.1" 200 OK
+INFO:     10.111.46.1:56552 - "GET /api/sandbox/files HTTP/1.1" 200 OK
+INFO:     10.111.46.1:57944 - "GET /api/sandbox/files HTTP/1.1" 200 OK
+INFO:     10.111.46.1:57950 - "GET /api/conversations/f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:57962 - "POST /api/chat HTTP/1.1" 200 OK
+INFO:     10.111.46.1:57966 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:57976 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:57980 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:57992 - "GET /api/sandbox/files HTTP/1.1" 200 OK
+INFO:     connection closed
+INFO:     10.111.46.1:58592 - "WebSocket /ws/sandbox" [accepted]
+INFO:     connection open
+INFO:     10.111.46.1:58594 - "GET /api/conversations HTTP/1.1" 200 OK
+INFO:     10.111.46.1:58606 - "GET /api/sandbox/files HTTP/1.1" 200 OK
+INFO:     10.111.46.1:58608 - "GET /api/sandbox/files HTTP/1.1" 200 OK
+INFO:     10.111.46.1:58614 - "GET /api/conversations/f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:58630 - "OPTIONS /api/chat HTTP/1.1" 200 OK
+INFO:     10.111.46.1:58644 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:58650 - "POST /api/chat HTTP/1.1" 200 OK
+INFO:     10.111.46.1:58656 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:58666 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:50054 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:50116 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:50118 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:36652 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:53390 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:53394 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:36086 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:36090 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:36100 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:36104 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:56702 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:56712 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:33034 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:33040 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     connection closed
+INFO:     10.111.46.1:41696 - "GET /api/conversations HTTP/1.1" 200 OK
+INFO:     10.111.46.1:41704 - "GET /api/sandbox/files HTTP/1.1" 200 OK
+INFO:     10.111.46.1:41720 - "GET /api/conversations/f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:42726 - "WebSocket /ws/sandbox" [accepted]
+INFO:     connection open
+INFO:     10.111.46.1:42732 - "POST /api/chat HTTP/1.1" 200 OK
+INFO:     10.111.46.1:42748 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:42752 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:42760 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:42764 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:42776 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:42786 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:42796 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:42802 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:42810 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:42822 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:42836 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:42846 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:42854 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:42866 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:42880 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:42892 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:42896 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:42904 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:32772 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:48822 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:48826 - "GET /api/sandbox/files/content?path=todo.md&conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:48830 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:48838 - "GET /api/sandbox/files/content?path=todo.md&conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:48854 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:33116 - "GET /api/sandbox/files/content?path=research_notes.md&conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:33130 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:33132 - "GET /api/sandbox/files/content?path=article_outline.md&conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:33136 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:33142 - "GET /api/sandbox/files/content?path=ai_agent_blog_draft.md&conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:33158 - "GET /api/sandbox/files?conversation_id=f74a6415-9bea-49c7-ae30-5c4b30d0d867 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:39804 - "GET /api/sandbox/files HTTP/1.1" 200 OK
+INFO:     10.111.46.1:43194 - "POST /api/chat HTTP/1.1" 200 OK
+INFO:     10.111.46.1:59080 - "GET /api/sandbox/files?conversation_id=aedd8aaf-d6bf-417f-b0cf-34853a9bbe97 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:33022 - "GET /api/sandbox/files?conversation_id=aedd8aaf-d6bf-417f-b0cf-34853a9bbe97 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:33024 - "GET /api/sandbox/files?conversation_id=aedd8aaf-d6bf-417f-b0cf-34853a9bbe97 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:40302 - "GET /api/sandbox/files?conversation_id=aedd8aaf-d6bf-417f-b0cf-34853a9bbe97 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:40310 - "GET /api/sandbox/files?conversation_id=aedd8aaf-d6bf-417f-b0cf-34853a9bbe97 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:33458 - "GET /api/sandbox/files?conversation_id=aedd8aaf-d6bf-417f-b0cf-34853a9bbe97 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:33470 - "GET /api/sandbox/files?conversation_id=aedd8aaf-d6bf-417f-b0cf-34853a9bbe97 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:60274 - "GET /api/sandbox/files?conversation_id=aedd8aaf-d6bf-417f-b0cf-34853a9bbe97 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:39466 - "GET /api/sandbox/files?conversation_id=aedd8aaf-d6bf-417f-b0cf-34853a9bbe97 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:50410 - "GET /api/sandbox/files?conversation_id=aedd8aaf-d6bf-417f-b0cf-34853a9bbe97 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:43932 - "GET /api/sandbox/files?conversation_id=aedd8aaf-d6bf-417f-b0cf-34853a9bbe97 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:43944 - "GET /api/sandbox/files?conversation_id=aedd8aaf-d6bf-417f-b0cf-34853a9bbe97 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:39900 - "GET /api/conversations/aedd8aaf-d6bf-417f-b0cf-34853a9bbe97 HTTP/1.1" 200 OK
+INFO:     10.111.46.1:39906 - "GET /api/conversations HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     connection closed
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [5347]

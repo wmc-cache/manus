@@ -1,5 +1,5 @@
 """
-Context Engineering for Agent Loop.
+Context Engineering for Agent Loop — Enhanced Edition.
 
 Key improvements over original:
 1. KV-cache friendly compression: only append/trim at tail, never mutate prefix
@@ -7,6 +7,9 @@ Key improvements over original:
 3. Enhanced todo.md attention manipulation: structured injection at optimal position
 4. Recoverable compression with file-backed externalization
 5. Token-aware budgeting with configurable limits
+6. Dynamic tool gating based on plan phase capabilities (not just hardcoded phase IDs)
+7. Reasoning effort injection for adaptive thinking depth
+8. Compacted history markers for compressed old messages
 """
 import json
 import logging
@@ -17,6 +20,12 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from models.schemas import Conversation, Message, MessageRole, ToolCallStatus
 from sandbox.filesystem import get_workspace_root
+from llm.tokenizer import (
+    count_tokens,
+    count_messages_tokens,
+    estimate_remaining_budget,
+    truncate_to_token_budget,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -41,8 +50,7 @@ def _read_bool_env(name: str, default: bool) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Masking helpers – used to produce deterministic summaries for externalized
-# content so that the LLM can decide whether to re-read the full file.
+# Masking helpers
 # ---------------------------------------------------------------------------
 
 def _stable_hash(text: str) -> str:
@@ -72,7 +80,6 @@ class ContextManager:
         self.externalize_threshold_chars = externalize_threshold_chars
         self.message_externalize_threshold_chars = message_externalize_threshold_chars
         self.summary_chars = summary_chars
-        # NEW: how many recent messages to scan for errors to retain
         self.error_retention_window = error_retention_window
         self.max_error_chars = max_error_chars
 
@@ -80,9 +87,15 @@ class ContextManager:
 
     @staticmethod
     def _clip_text(text: str, max_chars: int) -> str:
+        """Clip text by character count (fast path)."""
         if len(text) <= max_chars:
             return text
         return text[:max_chars] + f"\n... [内容已截断，省略 {len(text) - max_chars} 字符]"
+
+    @staticmethod
+    def _clip_text_by_tokens(text: str, max_tokens: int) -> str:
+        """[新增] Clip text by token count (precise path)."""
+        return truncate_to_token_budget(text, max_tokens)
 
     @staticmethod
     def _single_line_preview(text: str) -> str:
@@ -115,7 +128,7 @@ class ContextManager:
     def _build_tool_content(self, conversation: Conversation, message: Message, limit: int) -> str:
         content = message.content or ""
 
-        # NEW: Always preserve error messages in full (up to max_error_chars)
+        # Always preserve error messages in full (up to max_error_chars)
         is_error = self._is_error_tool_message(message)
         if is_error:
             return self._clip_text(content, self.max_error_chars)
@@ -203,15 +216,55 @@ class ContextManager:
         error_indices = set()
         for idx, msg in enumerate(messages):
             if self._is_error_tool_message(msg):
-                # Keep the error message itself
                 error_indices.add(idx)
-                # Keep the preceding assistant message (tool call that caused error)
                 if idx > 0 and messages[idx - 1].role == MessageRole.ASSISTANT:
                     error_indices.add(idx - 1)
-                # Keep the next assistant message (recovery attempt)
                 if idx + 1 < len(messages) and messages[idx + 1].role == MessageRole.ASSISTANT:
                     error_indices.add(idx + 1)
         return error_indices
+
+    # ---- Compacted history markers (new) ----
+
+    def _build_compacted_history_marker(
+        self,
+        messages: List[Message],
+        start_idx: int,
+        end_idx: int,
+    ) -> str:
+        """
+        Build a concise summary of compacted messages, similar to Manus 1.6 Max's
+        <compacted_history> markers. Instead of just saying "N messages omitted",
+        provide a brief description of what tools were used.
+        """
+        tool_actions = []
+        for i in range(start_idx, min(end_idx, len(messages))):
+            msg = messages[i]
+            if msg.role == MessageRole.ASSISTANT and msg.tool_calls:
+                for tc in msg.tool_calls:
+                    brief = f"{tc.name}"
+                    if tc.arguments:
+                        # Extract a key argument for context
+                        args = tc.arguments
+                        if isinstance(args, dict):
+                            for key in ["command", "path", "query", "url", "code"]:
+                                if key in args:
+                                    val = str(args[key])[:60]
+                                    brief += f"({key}={val})"
+                                    break
+                    tool_actions.append(brief)
+
+        count = end_idx - start_idx
+        if tool_actions:
+            actions_str = ", ".join(tool_actions[:8])
+            if len(tool_actions) > 8:
+                actions_str += f" ... 等 {len(tool_actions)} 个操作"
+            return (
+                f"<compacted_history>\n"
+                f"省略了 {count} 条消息。主要操作: {actions_str}\n"
+                f"关键错误记录已保留。如需回顾历史，请读取 context_memory/ 目录。\n"
+                f"</compacted_history>"
+            )
+        return f"[上下文压缩] 省略了 {count} 条较早消息。如需回顾历史，请读取 context_memory/ 目录。"
 
     # ---- KV-cache friendly compression ----
 
@@ -226,38 +279,30 @@ class ContextManager:
         - Keep system prompt prefix stable (never mutate)
         - Only trim from the middle, keeping recent messages intact
         - Preserve error messages with higher priority
-        - Return (compressed_messages, omitted_count)
+        - Use compacted_history markers for better context
         """
         total = len(messages)
         if total <= self.max_context_messages:
-            # No compression needed
             return self._format_all_messages(conversation, messages, recent_count), 0
 
-        # Identify error messages in the window that would be dropped
         error_indices = self._collect_error_indices(messages)
 
-        # Calculate how many to drop
         to_keep = self.max_context_messages
         recent_start = max(0, total - recent_count)
 
-        # Always keep: first message + recent messages + error messages
         must_keep_indices = set()
         must_keep_indices.add(0)  # First user message
         for i in range(recent_start, total):
             must_keep_indices.add(i)
-        # Add error indices from the droppable range
         for idx in error_indices:
             if idx < recent_start:
                 must_keep_indices.add(idx)
 
-        # Build the kept indices
         kept_indices = sorted(must_keep_indices)
 
-        # If we still have budget, fill from the middle
         remaining_budget = to_keep - len(kept_indices)
         if remaining_budget > 0:
             candidates = [i for i in range(total) if i not in must_keep_indices]
-            # Prefer more recent messages
             candidates.sort(reverse=True)
             for idx in candidates[:remaining_budget]:
                 kept_indices.append(idx)
@@ -267,17 +312,17 @@ class ContextManager:
         result = []
 
         if omitted > 0:
+            # Build compacted history marker with tool action summaries
+            dropped_start = 1  # After first message
+            dropped_end = recent_start
+            marker = self._build_compacted_history_marker(messages, dropped_start, dropped_end)
             result.append({
                 "role": "system",
-                "content": (
-                    f"[上下文压缩] 省略了 {omitted} 条较早消息。"
-                    "关键错误记录已保留。如需回顾历史，请读取 context_memory/ 目录。"
-                ),
+                "content": marker,
             })
 
         prev_idx = -1
         for idx in kept_indices:
-            # Insert gap marker if there's a discontinuity
             if prev_idx >= 0 and idx - prev_idx > 1:
                 gap = idx - prev_idx - 1
                 result.append({
@@ -346,7 +391,6 @@ class ContextManager:
             return entry
 
         if msg.role == MessageRole.TOOL:
-            # For error messages, use higher char limit
             effective_limit = self.max_error_chars if is_error else limit
             return {
                 "role": "tool",
@@ -386,7 +430,6 @@ class ContextManager:
         """
         Build the plan injection message.
         Placed at the END of context to maximize attention (recency bias).
-        Includes structured markers for the LLM to parse.
         """
         return {
             "role": "system",
@@ -394,19 +437,67 @@ class ContextManager:
                 "=== 当前任务计划 (todo.md) ===\n"
                 "请将以下计划作为执行主线，优先推进当前标记为 [-] 的阶段。\n"
                 "完成当前阶段后，更新计划状态并推进到下一阶段。\n"
-                "如果发现计划不再适配当前上下文，可先说明原因再调整计划。\n\n"
+                "如果发现计划不再适配当前上下文，可先说明原因再调整计划。\n"
+                "严禁跳过阶段或回退阶段；如需调整，应修订整个计划。\n\n"
                 f"{self._clip_text(plan_markdown, self.max_plan_chars)}\n"
                 "=== 计划结束 ==="
             ),
         }
 
+    # ---- Reasoning effort injection (new) ----
+
+    def _build_reasoning_effort_injection(
+        self,
+        conversation: Conversation,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Inject reasoning effort guidance based on task complexity.
+        Similar to Manus 1.6 Max's <reasoning_effort> mechanism.
+        """
+        msg_count = len(conversation.messages)
+        plan = conversation.plan
+
+        # Determine effort level
+        if plan and plan.phases:
+            total_phases = len(plan.phases)
+            if total_phases >= 6:
+                effort = "high"
+            elif total_phases >= 4:
+                effort = "medium"
+            else:
+                effort = "low"
+        elif msg_count > 20:
+            effort = "high"
+        elif msg_count > 8:
+            effort = "medium"
+        else:
+            effort = "low"
+
+        effort_instructions = {
+            "high": (
+                "[推理深度: 高] 当前任务较为复杂，请进行深入思考。"
+                "在选择工具前，仔细分析当前状态、已有信息和可能的方案。"
+                "考虑边界情况和潜在问题。"
+            ),
+            "medium": (
+                "[推理深度: 中] 当前任务中等复杂度。"
+                "请保持适度的思考深度，平衡效率和质量。"
+            ),
+            "low": (
+                "[推理深度: 低] 当前任务较为简单。"
+                "快速执行即可，无需过度思考。"
+            ),
+        }
+
+        return {
+            "role": "system",
+            "content": effort_instructions.get(effort, effort_instructions["medium"]),
+        }
+
     # ---- Error summary injection ----
 
     def _build_error_summary(self, messages: List[Message]) -> Optional[Dict[str, Any]]:
-        """
-        Summarize recent errors into a compact injection.
-        This helps the LLM avoid repeating the same mistakes.
-        """
+        """Summarize recent errors into a compact injection."""
         recent = messages[-self.error_retention_window:] if len(messages) > self.error_retention_window else messages
         errors = []
         for msg in recent:
@@ -426,7 +517,7 @@ class ContextManager:
             "role": "system",
             "content": (
                 "[错误记忆] 近期工具调用失败记录（请避免重复相同错误）：\n"
-                + "\n".join(errors[-5:])  # Keep at most 5 recent errors
+                + "\n".join(errors[-5:])
             ),
         }
 
@@ -441,11 +532,12 @@ class ContextManager:
         Builds LLM input messages with KV-cache friendly compression.
 
         Message structure (optimized for attention):
-        1. [System] Compression notice (if any)
+        1. [System] Compression notice / compacted history (if any)
         2. [History] Compressed old messages with error retention
         3. [Recent] Full recent messages
         4. [System] Error summary (if any recent errors)
-        5. [System] Plan injection (todo.md) - at the END for maximum attention
+        5. [System] Reasoning effort guidance
+        6. [System] Plan injection (todo.md) - at the END for maximum attention
         """
         messages: List[Dict[str, Any]] = []
         all_msgs = conversation.messages
@@ -456,61 +548,107 @@ class ContextManager:
         )
         messages.extend(compressed)
 
-        # Inject error summary before plan (if there are recent errors)
+        # Inject error summary before plan
         error_summary = self._build_error_summary(all_msgs)
         if error_summary:
             messages.append(error_summary)
+
+        # Inject reasoning effort guidance
+        reasoning = self._build_reasoning_effort_injection(conversation)
+        if reasoning:
+            messages.append(reasoning)
 
         # Inject plan at the END for maximum attention (recency bias)
         if plan_markdown:
             messages.append(self._build_plan_injection(plan_markdown))
 
+        # [P1优化] Token 预算检查 — 如果超出预算，从中间裁剪最旧的消息
+        max_context_tokens = int(os.environ.get("MANUS_MAX_CONTEXT_TOKENS", "60000"))
+        reserved_tokens = int(os.environ.get("MANUS_RESERVED_RESPONSE_TOKENS", "4000"))
+        total_tokens = count_messages_tokens(messages)
+        budget = max_context_tokens - reserved_tokens
+
+        if total_tokens > budget and len(messages) > 4:
+            logger.warning(
+                "Context tokens (%d) exceed budget (%d), trimming oldest messages",
+                total_tokens, budget,
+            )
+            # 保留第一条和最后 N 条，从中间删除
+            while total_tokens > budget and len(messages) > 4:
+                # 删除第二条（第一条是用户原始消息或压缩标记，保留）
+                removed = messages.pop(1)
+                total_tokens = count_messages_tokens(messages)
+
+            logger.info("After trimming: %d tokens, %d messages", total_tokens, len(messages))
+
         return messages
 
 
 class ToolStateMachine:
-    """Phase-aware tool gating policy with enhanced state transitions."""
+    """
+    Phase-aware tool gating policy with enhanced state transitions.
 
+    Enhanced: Now supports dynamic capability-based gating in addition to
+    hardcoded phase policies. When a plan phase has 'capabilities' metadata,
+    the tool set is dynamically adjusted.
+    """
+
+    # Capability-to-tools mapping (similar to Manus 1.6 Max phase capabilities)
+    CAPABILITY_TOOLS = {
+        "deep_research": {
+            "web_search", "wide_research", "spawn_sub_agents",
+            "browser_navigate", "browser_get_content", "browser_screenshot",
+            "browser_click", "browser_input", "browser_scroll",
+            "read_file", "write_file", "edit_file", "find_files", "grep_files",
+        },
+        "data_analysis": {
+            "data_analysis", "execute_code", "shell_exec",
+            "read_file", "write_file", "edit_file", "list_files",
+            "find_files", "grep_files",
+        },
+        "web_development": {
+            "shell_exec", "execute_code",
+            "read_file", "write_file", "edit_file", "append_file",
+            "list_files", "find_files", "grep_files",
+            "browser_navigate", "browser_get_content", "browser_screenshot",
+        },
+        "technical_writing": {
+            "web_search", "read_file", "write_file", "edit_file",
+            "append_file", "list_files", "find_files", "grep_files",
+        },
+        "creative_writing": {
+            "web_search", "read_file", "write_file", "edit_file",
+            "append_file",
+        },
+        "parallel_processing": {
+            "wide_research", "spawn_sub_agents",
+            "web_search", "read_file", "write_file",
+        },
+    }
+
+    # Fallback: hardcoded phase policies (used when no capabilities are specified)
     PHASE_TOOL_POLICIES = {
         1: {
-            "web_search",
-            "wide_research",
-            "spawn_sub_agents",
-            "browser_navigate",
-            "browser_screenshot",
-            "browser_get_content",
-            "browser_click",
-            "browser_input",
-            "browser_scroll",
-            "read_file",
-            "write_file",
-            "edit_file",
+            "web_search", "wide_research", "spawn_sub_agents",
+            "browser_navigate", "browser_screenshot", "browser_get_content",
+            "browser_click", "browser_input", "browser_scroll",
+            "read_file", "write_file", "edit_file",
+            "find_files", "grep_files",
         },
         2: {
-            "web_search",
-            "wide_research",
-            "spawn_sub_agents",
-            "shell_exec",
-            "execute_code",
-            "browser_navigate",
-            "browser_screenshot",
-            "browser_get_content",
-            "browser_click",
-            "browser_input",
-            "browser_scroll",
-            "read_file",
-            "write_file",
-            "edit_file",
-            "list_files",
-            "data_analysis",
+            "web_search", "wide_research", "spawn_sub_agents",
+            "shell_exec", "execute_code",
+            "browser_navigate", "browser_screenshot", "browser_get_content",
+            "browser_click", "browser_input", "browser_scroll",
+            "read_file", "write_file", "edit_file", "append_file",
+            "list_files", "data_analysis",
+            "find_files", "grep_files",
         },
         3: {
             "web_search",
-            "browser_navigate",
-            "browser_get_content",
-            "read_file",
-            "write_file",
-            "edit_file",
+            "browser_navigate", "browser_get_content",
+            "read_file", "write_file", "edit_file", "append_file",
+            "find_files", "grep_files",
         },
     }
 
@@ -529,11 +667,50 @@ class ToolStateMachine:
                 return name
         return ""
 
+    def _get_capability_tools(self, conversation: Conversation) -> Optional[set]:
+        """
+        Get allowed tools based on current phase capabilities.
+        Returns None if no capabilities are defined (fall back to phase policy).
+        """
+        plan = conversation.plan
+        if not plan or not plan.phases:
+            return None
+
+        current_phase = None
+        for phase in plan.phases:
+            if phase.id == plan.current_phase_id:
+                current_phase = phase
+                break
+
+        if not current_phase:
+            return None
+
+        # Check if phase has capabilities attribute
+        capabilities = getattr(current_phase, 'capabilities', None)
+        if not capabilities or not isinstance(capabilities, dict):
+            return None
+
+        # Build tool set from capabilities
+        tools = set()
+        for cap_name, enabled in capabilities.items():
+            if enabled and cap_name in self.CAPABILITY_TOOLS:
+                tools.update(self.CAPABILITY_TOOLS[cap_name])
+
+        return tools if tools else None
+
     def get_allowed_tools(self, conversation: Conversation, candidate_tools: Sequence[str]) -> List[str]:
         allowed = [name for name in candidate_tools if isinstance(name, str) and name]
         if not self.enabled or not allowed:
             return allowed
 
+        # Try capability-based gating first
+        cap_tools = self._get_capability_tools(conversation)
+        if cap_tools:
+            narrowed = [tool for tool in allowed if tool in cap_tools]
+            if narrowed:
+                return narrowed
+
+        # Fall back to hardcoded phase policies
         phase_id = conversation.plan.current_phase_id if conversation.plan else None
         phase_policy = self.PHASE_TOOL_POLICIES.get(phase_id)
         if phase_policy:

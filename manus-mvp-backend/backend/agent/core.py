@@ -71,6 +71,18 @@ MAX_RECENT_MESSAGE_CHARS = int(os.environ.get("MANUS_MAX_RECENT_MESSAGE_CHARS", 
 MAX_OLD_MESSAGE_CHARS = int(os.environ.get("MANUS_MAX_OLD_MESSAGE_CHARS", "1200"))
 TODO_FILENAME = "todo.md"
 CONTINUE_MESSAGES = {"继续", "继续。", "continue", "continue.", "go on"}
+
+# 可安全并行执行的工具（只读/无副作用）
+PARALLEL_SAFE_TOOLS = {
+    "web_search", "read_file", "list_files", "find_files", "grep_files",
+    "browser_screenshot", "browser_get_content", "data_analysis",
+}
+# 有副作用的工具，必须串行执行
+SERIAL_ONLY_TOOLS = {
+    "write_file", "edit_file", "append_file", "shell_exec", "execute_code",
+    "browser_navigate", "browser_click", "browser_input", "browser_scroll",
+    "wide_research", "spawn_sub_agents",
+}
 DEFAULT_TOOL_NAMES = [
     "web_search",
     "wide_research",
@@ -88,6 +100,8 @@ DEFAULT_TOOL_NAMES = [
     "edit_file",
     "append_file",
     "list_files",
+    "find_files",
+    "grep_files",
     "data_analysis",
 ]
 
@@ -305,6 +319,13 @@ class AgentEngine:
 
     @staticmethod
     def _transition_plan_to_execution(plan: Optional[TaskPlan]) -> bool:
+        """[优化] 推进计划到执行阶段。
+        
+        改进逻辑：
+        - 如果没有 RUNNING 阶段，激活下一个 PENDING/FAILED 阶段
+        - 如果有 RUNNING 阶段，保持当前阶段不变（由 advance_plan_phase 显式推进）
+        - 移除了原先"仅在第一阶段才推进"的硬编码限制
+        """
         if not plan or not plan.phases:
             return False
 
@@ -316,6 +337,7 @@ class AgentEngine:
         )
 
         if running_idx is None:
+            # 没有运行中的阶段，激活下一个待执行阶段
             next_idx = next(
                 (idx for idx, phase in enumerate(phases) if phase.status in {PlanPhaseStatus.PENDING, PlanPhaseStatus.FAILED}),
                 None,
@@ -327,33 +349,47 @@ class AgentEngine:
                 plan.current_phase_id = phases[next_idx].id
             return True
 
-        # 仅在第一阶段时推进到下一阶段；避免每轮工具调用都跳阶段。
-        if running_idx != 0:
-            if plan.current_phase_id != phases[running_idx].id:
-                plan.current_phase_id = phases[running_idx].id
-                changed = True
-            return changed
-
-        next_idx = next(
-            (idx for idx, phase in enumerate(phases[1:], start=1) if phase.status in {PlanPhaseStatus.PENDING, PlanPhaseStatus.FAILED}),
-            None,
-        )
-        if next_idx is None:
-            if plan.current_phase_id != phases[running_idx].id:
-                plan.current_phase_id = phases[running_idx].id
-                changed = True
-            return changed
-
-        if phases[running_idx].status != PlanPhaseStatus.COMPLETED:
-            phases[running_idx].status = PlanPhaseStatus.COMPLETED
-            changed = True
-        if phases[next_idx].status != PlanPhaseStatus.RUNNING:
-            phases[next_idx].status = PlanPhaseStatus.RUNNING
-            changed = True
-        if plan.current_phase_id != phases[next_idx].id:
-            plan.current_phase_id = phases[next_idx].id
+        # 有运行中的阶段，确保 current_phase_id 同步
+        if plan.current_phase_id != phases[running_idx].id:
+            plan.current_phase_id = phases[running_idx].id
             changed = True
         return changed
+
+    @staticmethod
+    def _advance_plan_phase(plan: Optional[TaskPlan]) -> bool:
+        """[新增] 显式推进计划到下一阶段。
+        
+        将当前 RUNNING 阶段标记为 COMPLETED，激活下一个 PENDING 阶段。
+        由 Agent Loop 在检测到阶段完成信号时调用。
+        """
+        if not plan or not plan.phases:
+            return False
+
+        phases = plan.phases
+        running_idx = next(
+            (idx for idx, phase in enumerate(phases) if phase.status == PlanPhaseStatus.RUNNING),
+            None,
+        )
+        if running_idx is None:
+            return False
+
+        # 标记当前阶段完成
+        phases[running_idx].status = PlanPhaseStatus.COMPLETED
+
+        # 查找下一个待执行阶段
+        next_idx = next(
+            (idx for idx, phase in enumerate(phases[running_idx + 1:], start=running_idx + 1)
+             if phase.status in {PlanPhaseStatus.PENDING, PlanPhaseStatus.FAILED}),
+            None,
+        )
+        if next_idx is not None:
+            phases[next_idx].status = PlanPhaseStatus.RUNNING
+            plan.current_phase_id = phases[next_idx].id
+        else:
+            # 没有更多阶段，保持在最后一个已完成阶段
+            plan.current_phase_id = phases[running_idx].id
+
+        return True
 
     @staticmethod
     def _mark_plan_completed(plan: Optional[TaskPlan]) -> bool:
@@ -466,12 +502,29 @@ class AgentEngine:
 
     @staticmethod
     def _is_repeated_tool_signature(history: List[str], signature: str) -> bool:
+        """[优化] 增强循环检测：同时检测完全相同的调用和同工具名的重复调用。"""
         if TOOL_LOOP_REPEAT_THRESHOLD <= 1:
             return True
         if len(history) < TOOL_LOOP_REPEAT_THRESHOLD - 1:
             return False
         tail = history[-(TOOL_LOOP_REPEAT_THRESHOLD - 1):]
-        return all(item == signature for item in tail)
+
+        # 检测1: 完全相同的签名重复
+        if all(item == signature for item in tail):
+            return True
+
+        # 检测2: 同一工具名的重复调用（参数不同但工具同）
+        # 这可以捕获如“反复读取同一文件但略有不同参数”的循环
+        tool_name = signature.split(":", 1)[0]
+        same_tool_count = sum(
+            1 for item in tail if item.split(":", 1)[0] == tool_name
+        )
+        # 如果近期窗口内同一工具被调用超过 threshold+1 次，视为循环
+        extended_threshold = TOOL_LOOP_REPEAT_THRESHOLD + 1
+        if same_tool_count >= extended_threshold - 1:
+            return True
+
+        return False
 
     @staticmethod
     def _has_completed_tool_call(conversation: Conversation, tool_name: str) -> bool:
@@ -519,11 +572,25 @@ class AgentEngine:
 
         if not spawn_completed:
             return (
-                "【运行模式】深度研究（子代理并行）已开启。\n"
-                "请优先调用 spawn_sub_agents 工具，不要改用 wide_research。\n"
-                "你需要从用户请求中提炼 task_template、items、reduce_goal，并立即发起并行。\n"
-                f"调用 spawn_sub_agents 时请显式传入: max_concurrency={concurrency}, max_items={items}, max_iterations={iterations}。\n"
-                "完成后读取 multi_agent/reduce_summary.md 并给出最终结论。"
+                "【重要：深度研究模式已开启】\n\n"
+                "你现在处于深度研究模式。你必须使用 spawn_sub_agents 工具来并行研究。\n\n"
+                "**你必须立即调用 spawn_sub_agents 工具**，不要使用其他工具。\n"
+                "不要使用 web_search、shell_exec、write_file 等工具来手动研究。\n"
+                "不要自己搜索信息，让子代理去做。\n\n"
+                "spawn_sub_agents 的参数说明：\n"
+                "- task_template: 子代理的任务模板，用 {item} 作为占位符\n"
+                "- items: 要并行研究的子主题列表（字符串数组）\n"
+                "- reduce_goal: 汇总目标，描述如何将所有子代理结果合并\n"
+                f"- max_concurrency: {concurrency}\n"
+                f"- max_items: {items}\n"
+                f"- max_iterations: {iterations}\n\n"
+                "示例调用：\n"
+                "spawn_sub_agents(\n"
+                '  task_template="请深入研究 {item} 的最新进展、关键技术和应用场景",\n'
+                '  items=["主题1", "主题2", "主题3"],\n'
+                '  reduce_goal="综合所有研究结果，撰写一份全面的分析报告"\n'
+                ")\n\n"
+                "请根据用户的请求，拆分出合理的子主题列表，然后立即调用 spawn_sub_agents。"
             )
 
         if not reduce_summary_read_completed:
@@ -558,6 +625,10 @@ class AgentEngine:
         4. 直到 LLM 返回纯文本（无工具调用）或达到最大迭代次数
         """
         # 获取或创建对话
+        logger.info(
+            "[AgentLoop] Starting: deep_research_enabled=%s, message=%s",
+            deep_research_enabled, user_message[:80]
+        )
         conversation = self.get_or_create_conversation(conversation_id)
 
         # 添加用户消息（控制指令可选择不写入会话历史）
@@ -642,11 +713,15 @@ class AgentEngine:
             # 深度研究分阶段收敛工具，避免在汇总阶段继续发散调用。
             if deep_research_enabled:
                 if reduce_summary_read_completed:
+                    logger.info("[DeepResearch] Phase 3: reduce_summary read done, disabling all tools")
                     allowed_tools = []
                 elif spawn_completed:
+                    logger.info("[DeepResearch] Phase 2: spawn completed, only read_file allowed")
                     allowed_tools = [name for name in allowed_tools if name == "read_file"]
                 else:
-                    allowed_tools = [name for name in allowed_tools if name == "spawn_sub_agents"]
+                    # 第一阶段只允许 spawn_sub_agents，强制 LLM 必须调用它
+                    allowed_tools = ["spawn_sub_agents"]
+                    logger.info("[DeepResearch] Phase 1: ONLY spawn_sub_agents allowed")
             content = ""
             tool_calls_data: List[Dict[str, Any]] = []
             content_streamed = False
@@ -848,8 +923,95 @@ class AgentEngine:
                     }, ensure_ascii=False)
                 }
 
-            # 逐个处理工具调用：每轮只允许执行一个真实工具动作，其他标记为跳过
-            for tc_index, tc in enumerate(tool_call_objects):
+            # 智能并行工具执行：安全工具可并行，有副作用的工具串行执行
+            # 分类工具调用
+            parallel_batch: List[ToolCall] = []  # 可并行的只读工具
+            serial_queue: List[ToolCall] = []    # 必须串行的有副作用工具
+            for tc in tool_call_objects:
+                if tc.name in PARALLEL_SAFE_TOOLS:
+                    parallel_batch.append(tc)
+                else:
+                    serial_queue.append(tc)
+
+            # 先并行执行所有安全工具
+            if parallel_batch:
+                # 通知前端所有并行工具开始
+                for tc in parallel_batch:
+                    yield {
+                        "event": SSEEventType.TOOL_CALL,
+                        "data": json.dumps({
+                            "id": tc.id,
+                            "name": tc.name,
+                            "arguments": tc.arguments,
+                            "status": "running"
+                        }, ensure_ascii=False)
+                    }
+
+                # 并发执行所有安全工具
+                async def _exec_parallel_tool(tc_item: ToolCall) -> tuple:
+                    try:
+                        parse_error = tool_call_parse_errors.get(tc_item.id)
+                        if parse_error:
+                            preview = tool_call_parse_previews.get(tc_item.id, "")
+                            res = (
+                                f"工具执行失败: 模型生成的 `{tc_item.name}` 参数不是合法 JSON。"
+                                f"原因: {parse_error}"
+                            )
+                            if preview:
+                                res += f"\n参数片段: {preview}"
+                            return tc_item, res, ToolCallStatus.FAILED
+                        res = await execute_tool(tc_item.name, tc_item.arguments, conversation_id=conversation.id)
+                        return tc_item, res, ToolCallStatus.COMPLETED
+                    except Exception as e:
+                        return tc_item, f"工具执行失败: {str(e)}", ToolCallStatus.FAILED
+
+                parallel_tasks = [_exec_parallel_tool(tc) for tc in parallel_batch]
+                parallel_results = await asyncio.gather(*parallel_tasks, return_exceptions=True)
+
+                for pr in parallel_results:
+                    if isinstance(pr, Exception):
+                        continue
+                    tc, result, status = pr
+                    tc.result = result
+                    tc.status = status
+
+                    # 记录工具签名用于循环检测
+                    if status == ToolCallStatus.COMPLETED:
+                        signature = self._build_tool_signature(tc.name, tc.arguments)
+                        recent_tool_signatures.append(signature)
+                        if len(recent_tool_signatures) > TOOL_LOOP_WINDOW:
+                            recent_tool_signatures = recent_tool_signatures[-TOOL_LOOP_WINDOW:]
+
+                    # 通知前端工具结果
+                    yield {
+                        "event": SSEEventType.TOOL_RESULT,
+                        "data": json.dumps({
+                            "id": tc.id,
+                            "name": tc.name,
+                            "result": result[:2000],
+                            "status": tc.status.value
+                        }, ensure_ascii=False)
+                    }
+
+                    # 添加到对话历史
+                    tool_msg = Message(
+                        role=MessageRole.TOOL,
+                        content=result,
+                        tool_calls=[ToolCall(
+                            id=tc.id,
+                            name=tc.name,
+                            arguments=tc.arguments,
+                            result=result,
+                            status=tc.status
+                        )]
+                    )
+                    conversation.messages.append(tool_msg)
+
+                self._save_conversations()
+
+            # 再串行执行有副作用的工具（每轮只执行第一个，其余跳过）
+            serial_executed = False
+            for tc_index, tc in enumerate(serial_queue):
                 # 通知前端工具调用开始
                 yield {
                     "event": SSEEventType.TOOL_CALL,
@@ -861,9 +1023,9 @@ class AgentEngine:
                     }, ensure_ascii=False)
                 }
 
-                if tc_index > 0:
+                if serial_executed:
                     result = (
-                        "工具调用被跳过：当前执行策略为“每轮仅执行 1 个工具动作”，"
+                        "工具调用被跳过：当前轮次已执行了一个有副作用的工具，"
                         "请在下一轮继续。"
                     )
                     tc.result = result
@@ -969,6 +1131,8 @@ class AgentEngine:
                                 invalid_args_fail_count += 1
                                 last_invalid_tool_name = tc.name
                                 last_invalid_reason = "invalid_args"
+
+                    serial_executed = True
 
                 # 通知前端工具调用结果
                 yield {

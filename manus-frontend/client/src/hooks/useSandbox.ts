@@ -1,20 +1,24 @@
 /**
  * useSandbox - 管理计算机窗口 WebSocket 连接和沙箱事件
  * 支持按 conversation_id 隔离：每个对话有独立的终端、编辑器、浏览器、文件系统
+ * 
+ * [优化] 文件树刷新采用 debounce 防抖机制，避免高频 file_changed 事件导致的轮询风暴
  */
 import { useState, useEffect, useCallback, useRef } from "react";
 
-const API_BASE = (import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
+const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
 const API_TOKEN = (import.meta.env.VITE_MANUS_API_TOKEN || "").trim();
-const WS_BASE = API_BASE.startsWith("https://")
-  ? API_BASE.replace(/^https:/, "wss:")
-  : API_BASE.replace(/^http:/, "ws:");
-const WS_URL = `${WS_BASE}/ws/sandbox${API_TOKEN ? `?token=${encodeURIComponent(API_TOKEN)}` : ""}`;
-
+// WebSocket 地址：通过当前页面的 host 动态构建，走 Vite proxy
+const _wsProto = typeof window !== "undefined" && window.location.protocol === "https:" ? "wss:" : "ws:";
+const _wsHost = typeof window !== "undefined" ? window.location.host : "localhost:3000";
+const WS_URL = `${_wsProto}//${_wsHost}/ws/sandbox${API_TOKEN ? `?token=${encodeURIComponent(API_TOKEN)}` : ""}`;
 function buildAuthHeaders(base: Record<string, string> = {}): Record<string, string> {
   if (!API_TOKEN) return base;
   return { ...base, Authorization: `Bearer ${API_TOKEN}` };
 }
+
+/** 文件树刷新防抖间隔（毫秒） */
+const FILE_TREE_DEBOUNCE_MS = 500;
 
 export interface SandboxEvent {
   type: string;
@@ -77,9 +81,16 @@ export function useSandbox() {
   const fetchFileTreeRef = useRef<() => void>(() => {});
   // 当前订阅的 conversation_id
   const currentConvIdRef = useRef<string | null>(null);
+  // 防抖定时器 ref
+  const fileTreeDebounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // 标记是否有正在进行的 fetchFileTree 请求，避免并发请求
+  const fetchFileTreeInFlightRef = useRef(false);
 
-  // 获取文件树（按 conversation_id 隔离）
+  // 获取文件树（按 conversation_id 隔离）— 实际执行函数
   const fetchFileTree = useCallback(async () => {
+    // 防止并发请求
+    if (fetchFileTreeInFlightRef.current) return;
+    fetchFileTreeInFlightRef.current = true;
     try {
       const convId = currentConvIdRef.current;
       const params = convId ? `?conversation_id=${encodeURIComponent(convId)}` : "";
@@ -90,7 +101,17 @@ export function useSandbox() {
       setFileTree(data.tree || []);
     } catch {
       // ignore
+    } finally {
+      fetchFileTreeInFlightRef.current = false;
     }
+  }, []);
+
+  // 防抖版本的 fetchFileTree — 合并短时间内的多次调用为一次
+  const debouncedFetchFileTree = useCallback(() => {
+    clearTimeout(fileTreeDebounceRef.current);
+    fileTreeDebounceRef.current = setTimeout(() => {
+      fetchFileTreeRef.current();
+    }, FILE_TREE_DEBOUNCE_MS);
   }, []);
 
   // 保持 ref 始终指向最新的 fetchFileTree
@@ -101,6 +122,9 @@ export function useSandbox() {
   // 切换对话 — 重置所有计算机窗口状态，通知后端切换事件订阅
   const switchConversation = useCallback((conversationId: string | null) => {
     currentConvIdRef.current = conversationId;
+
+    // 清除待执行的防抖定时器
+    clearTimeout(fileTreeDebounceRef.current);
 
     // 重置所有窗口状态
     setTerminalOutput("");
@@ -124,7 +148,7 @@ export function useSandbox() {
       );
     }
 
-    // 刷新新对话的文件树
+    // 切换对话时立即刷新文件树（不走防抖）
     fetchFileTreeRef.current();
   }, []);
 
@@ -146,6 +170,7 @@ export function useSandbox() {
             conversation_id: convId,
           })
         );
+        // 连接建立时立即刷新（不走防抖）
         fetchFileTreeRef.current();
       };
 
@@ -243,11 +268,13 @@ export function useSandbox() {
                 size: ((data.data.content as string) || "").length,
               });
               setActiveWindow("editor");
-              fetchFileTreeRef.current();
+              // [优化] 使用防抖刷新文件树，避免高频事件导致轮询风暴
+              debouncedFetchFileTree();
               break;
 
             case "file_changed":
-              fetchFileTreeRef.current();
+              // [优化] 使用防抖刷新文件树，合并短时间内的多次 file_changed 事件
+              debouncedFetchFileTree();
               break;
           }
         } catch {
@@ -266,7 +293,7 @@ export function useSandbox() {
     } catch {
       reconnectTimerRef.current = setTimeout(connect, 3000);
     }
-  }, []);
+  }, [debouncedFetchFileTree]);
 
   // 发送终端输入
   const sendTerminalInput = useCallback((data: string) => {
@@ -372,6 +399,7 @@ export function useSandbox() {
 
     return () => {
       clearTimeout(reconnectTimerRef.current);
+      clearTimeout(fileTreeDebounceRef.current);
       wsRef.current?.close();
     };
   }, [connect, fetchFileTree]);

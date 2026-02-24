@@ -34,6 +34,18 @@ except ImportError:
     _EXTENDED_TOOLS_AVAILABLE = False
     EXTENDED_TOOL_REGISTRY = {}
 
+# Import search tools (find_files, grep_files)
+try:
+    from agent.tools_search import (
+        find_files as _search_find_files,
+        grep_files as _search_grep_files,
+        SEARCH_TOOL_REGISTRY,
+    )
+    _SEARCH_TOOLS_AVAILABLE = True
+except ImportError:
+    _SEARCH_TOOLS_AVAILABLE = False
+    SEARCH_TOOL_REGISTRY = {}
+
 # 当前执行上下文中的 conversation_id（由 execute_tool 设置，支持并发隔离）
 _current_conversation_id: ContextVar[Optional[str]] = ContextVar(
     "current_conversation_id",
@@ -167,13 +179,21 @@ SUB_AGENT_MAX_ITEMS_HARD = _read_positive_int_env("MANUS_SUBAGENT_MAX_ITEMS_HARD
 SUB_AGENT_MAX_CONCURRENCY_HARD = _read_positive_int_env("MANUS_SUBAGENT_CONCURRENCY_HARD", 20)
 SUB_AGENT_MAX_ITERATIONS_HARD = _read_positive_int_env("MANUS_SUBAGENT_MAX_ITERATIONS_HARD", 12)
 SUB_AGENT_MAX_TOOL_RESULT_CHARS = _read_positive_int_env("MANUS_SUBAGENT_MAX_TOOL_RESULT_CHARS", 4000)
-SUB_AGENT_ALLOWED_TOOLS = ["web_search", "read_file", "write_file"]
+SUB_AGENT_ALLOWED_TOOLS = ["web_search", "read_file", "write_file", "browser_navigate", "browser_get_content"]
 
 SUB_AGENT_SYSTEM_PROMPT = (
-    "你是并行任务中的子代理。"
-    "请围绕当前 item 独立完成任务，必要时调用工具。"
-    "优先做事实收集与简洁总结。"
-    "当得到足够信息后，给出结构化结论并停止调用工具。"
+    "你是并行深度研究任务中的子代理。\n"
+    "你的职责是围绕当前 item 独立完成研究任务。\n\n"
+    "工作流程：\n"
+    "1. 使用 web_search 搜索相关信息\n"
+    "2. 如果需要更详细的内容，使用 browser_navigate 访问搜索结果中的链接\n"
+    "3. 使用 browser_get_content 获取页面内容\n"
+    "4. 将研究结果用 write_file 保存到文件\n"
+    "5. 给出结构化结论并停止调用工具\n\n"
+    "要求：\n"
+    "- 优先做事实收集与简洁总结\n"
+    "- 当得到足够信息后，给出结构化结论并停止调用工具\n"
+    "- 结论应包含：核心发现、关键数据、信息来源"
 )
 
 
@@ -1390,6 +1410,12 @@ if _EXTENDED_TOOLS_AVAILABLE:
     for _ext_name, _ext_config in EXTENDED_TOOL_REGISTRY.items():
         if _ext_name not in TOOL_REGISTRY:
             TOOL_REGISTRY[_ext_name] = _ext_config
+
+# Merge search tools into registry
+if _SEARCH_TOOLS_AVAILABLE:
+    for _search_name, _search_config in SEARCH_TOOL_REGISTRY.items():
+        if _search_name not in TOOL_REGISTRY:
+            TOOL_REGISTRY[_search_name] = _search_config
 
 
 async def execute_tool(name: str, arguments: Dict[str, Any], conversation_id: Optional[str] = None) -> str:

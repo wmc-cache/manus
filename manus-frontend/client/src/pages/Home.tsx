@@ -86,6 +86,7 @@ export default function Home() {
     planReason,
     todoPath,
     subAgentIndex,
+    currentToolCall,
     conversationId,
     sendMessage,
     loadConversation,
@@ -333,6 +334,8 @@ export default function Home() {
                   onBrowserScroll={sandbox.browserScroll}
                   onBrowserKey={sandbox.browserKey}
                   browserInteractionError={sandbox.browserInteractionError}
+                  currentTool={currentToolCall ? { name: currentToolCall.name, arguments: currentToolCall.arguments } : null}
+                  isAgentWorking={isLoading}
                 />
               </div>
 
@@ -647,6 +650,8 @@ export default function Home() {
                 onBrowserKey={sandbox.browserKey}
                 browserInteractionError={sandbox.browserInteractionError}
                 onClose={() => setComputerOpen(false)}
+                currentTool={currentToolCall ? { name: currentToolCall.name, arguments: currentToolCall.arguments } : null}
+                isAgentWorking={isLoading}
               />
             </motion.div>
           )}

@@ -2,7 +2,10 @@
  * ComputerPanel - 计算机窗口主面板
  * 整合终端、编辑器、浏览器、文件管理器
  * 
- * 风格: 毛玻璃面板 + 标签页切换 + 状态指示器
+ * 对齐 Manus 1.6 Max 风格：
+ * - 面板顶部显示当前 Agent 正在使用的工具
+ * - 自动切换到对应的标签页
+ * - 更精细的状态指示
  */
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -16,8 +19,9 @@ import {
   Minimize2,
   X,
   Hand,
+  Loader2,
 } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import TerminalWindow from "./TerminalWindow";
 import EditorWindow from "./EditorWindow";
 import BrowserWindow from "./BrowserWindow";
@@ -29,6 +33,53 @@ import type {
   BrowserData,
   ManualTakeoverTarget,
 } from "@/hooks/useSandbox";
+
+/** 工具名称到面板标签页的映射 */
+const TOOL_TO_WINDOW: Record<string, ActiveWindow> = {
+  shell_exec: "terminal",
+  execute_code: "terminal",
+  browser_navigate: "browser",
+  browser_screenshot: "browser",
+  browser_get_content: "browser",
+  browser_click: "browser",
+  browser_input: "browser",
+  browser_scroll: "browser",
+  read_file: "editor",
+  write_file: "editor",
+  edit_file: "editor",
+  append_file: "editor",
+  list_files: "editor",
+  find_files: "editor",
+  grep_files: "editor",
+};
+
+/** 工具名称到人性化描述的映射 */
+const TOOL_ACTIVITY_LABEL: Record<string, string> = {
+  shell_exec: "终端",
+  execute_code: "终端",
+  browser_navigate: "浏览器",
+  browser_screenshot: "浏览器",
+  browser_get_content: "浏览器",
+  browser_click: "浏览器",
+  browser_input: "浏览器",
+  browser_scroll: "浏览器",
+  read_file: "编辑器",
+  write_file: "编辑器",
+  edit_file: "编辑器",
+  append_file: "编辑器",
+  list_files: "文件管理器",
+  find_files: "文件管理器",
+  grep_files: "文件管理器",
+  web_search: "网络搜索",
+  wide_research: "并行研究",
+  spawn_sub_agents: "子代理",
+  data_analysis: "数据分析",
+};
+
+interface CurrentToolInfo {
+  name: string;
+  arguments?: Record<string, unknown>;
+}
 
 interface ComputerPanelProps {
   connected: boolean;
@@ -50,6 +101,10 @@ interface ComputerPanelProps {
   onBrowserKey?: (key: "Enter" | "Tab" | "Escape") => void;
   browserInteractionError?: string | null;
   onClose?: () => void;
+  /** 当前正在执行的工具信息 */
+  currentTool?: CurrentToolInfo | null;
+  /** Agent 是否正在工作 */
+  isAgentWorking?: boolean;
 }
 
 const tabs: { id: ActiveWindow; label: string; icon: typeof Terminal }[] = [
@@ -78,8 +133,33 @@ export default function ComputerPanel({
   onBrowserKey,
   browserInteractionError,
   onClose,
+  currentTool,
+  isAgentWorking = false,
 }: ComputerPanelProps) {
   const [isMaximized, setIsMaximized] = useState(false);
+  const autoSwitchRef = useRef(true);
+
+  // 当工具变化时，自动切换到对应的标签页
+  useEffect(() => {
+    if (!currentTool || !autoSwitchRef.current) return;
+    const targetWindow = TOOL_TO_WINDOW[currentTool.name];
+    if (targetWindow && targetWindow !== activeWindow) {
+      onWindowChange(targetWindow);
+    }
+  }, [currentTool, activeWindow, onWindowChange]);
+
+  // 用户手动切换标签页时，暂时禁用自动切换
+  const handleWindowChange = (window: ActiveWindow) => {
+    autoSwitchRef.current = false;
+    onWindowChange(window);
+    // 3秒后恢复自动切换
+    setTimeout(() => {
+      autoSwitchRef.current = true;
+    }, 3000);
+  };
+
+  // 当前工具的活动标签
+  const currentToolLabel = currentTool ? TOOL_ACTIVITY_LABEL[currentTool.name] : null;
 
   return (
     <motion.div
@@ -94,14 +174,14 @@ export default function ComputerPanel({
       }`}
     >
       {/* 面板头部 */}
-      <div className="flex items-center justify-between px-4 py-2.5 bg-[oklch(0.16_0.014_260)] border-b border-border/20">
+      <div className="flex items-center justify-between px-4 py-2 bg-[oklch(0.16_0.014_260)] border-b border-border/20">
         <div className="flex items-center gap-2">
           <Monitor className="w-4 h-4 text-primary" />
           <span className="text-sm font-semibold text-foreground">
             Manus 计算机
           </span>
           {/* 连接状态 */}
-          <div className="flex items-center gap-1 ml-2">
+          <div className="flex items-center gap-1 ml-1">
             {connected ? (
               <>
                 <Wifi className="w-3 h-3 text-emerald-400" />
@@ -152,6 +232,32 @@ export default function ComputerPanel({
         </div>
       </div>
 
+      {/* 当前工具指示条 - 对齐 Manus 1.6 Max */}
+      <AnimatePresence>
+        {isAgentWorking && currentTool && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="overflow-hidden"
+          >
+            <div className="flex items-center gap-2 px-4 py-1.5 bg-primary/8 border-b border-primary/15">
+              <Loader2 className="w-3 h-3 text-primary animate-spin" />
+              <span className="text-xs text-primary/90 font-medium">
+                Manus 正在使用{currentToolLabel || currentTool.name}
+              </span>
+              {/* 显示工具的关键参数 */}
+              {currentTool.arguments && (
+                <span className="text-[10px] text-primary/50 font-mono truncate max-w-[200px]">
+                  {formatToolHint(currentTool.name, currentTool.arguments)}
+                </span>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* 标签栏 */}
       <div className="flex items-center gap-1 px-3 py-1.5 bg-[oklch(0.14_0.013_260)] border-b border-border/15">
         {tabs.map((tab) => {
@@ -164,10 +270,13 @@ export default function ComputerPanel({
           if (tab.id === "editor" && (editorFile || fileTree.length > 0)) hasActivity = true;
           if (tab.id === "browser" && browserData?.screenshot) hasActivity = true;
 
+          // 当前工具是否指向这个标签页
+          const isToolTarget = currentTool ? TOOL_TO_WINDOW[currentTool.name] === tab.id : false;
+
           return (
             <button
               key={tab.id}
-              onClick={() => onWindowChange(tab.id)}
+              onClick={() => handleWindowChange(tab.id)}
               className={`relative flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
                 isActive
                   ? "bg-accent/40 text-foreground"
@@ -180,6 +289,11 @@ export default function ComputerPanel({
               {/* 活跃指示点 */}
               {hasActivity && !isActive && (
                 <div className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
+              )}
+
+              {/* 当前工具指向该标签的脉冲指示 */}
+              {isToolTarget && isAgentWorking && !isActive && (
+                <div className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
               )}
             </button>
           );
@@ -234,4 +348,38 @@ export default function ComputerPanel({
       </div>
     </motion.div>
   );
+}
+
+/** 格式化工具提示信息 */
+function formatToolHint(name: string, args: Record<string, unknown>): string {
+  switch (name) {
+    case "shell_exec": {
+      const cmd = ((args.command as string) || "").trim();
+      return cmd.length > 30 ? cmd.slice(0, 27) + "..." : cmd;
+    }
+    case "browser_navigate":
+      return (args.url as string) || "";
+    case "browser_click":
+      return `(${args.x || 0}, ${args.y || 0})`;
+    case "browser_input": {
+      const text = (args.text as string) || "";
+      return text.length > 20 ? `"${text.slice(0, 17)}..."` : `"${text}"`;
+    }
+    case "read_file":
+    case "write_file":
+    case "edit_file":
+    case "append_file": {
+      const path = (args.path as string) || "";
+      const parts = path.split("/");
+      return parts[parts.length - 1] || path;
+    }
+    case "web_search":
+      return (args.query as string) || "";
+    case "find_files":
+      return (args.pattern as string) || "*";
+    case "grep_files":
+      return `/${(args.regex as string) || ""}/`;
+    default:
+      return "";
+  }
 }

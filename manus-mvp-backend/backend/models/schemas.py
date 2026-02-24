@@ -1,6 +1,6 @@
 """数据模型定义"""
 from pydantic import BaseModel, Field
-from typing import Optional, List, Any
+from typing import Optional, List, Any, Dict
 from enum import Enum
 import uuid
 from datetime import datetime
@@ -49,6 +49,7 @@ class PlanPhase(BaseModel):
     id: int
     title: str
     status: PlanPhaseStatus = PlanPhaseStatus.PENDING
+    capabilities: Dict[str, bool] = Field(default_factory=dict)  # Phase capability annotations
 
 
 class TaskPlan(BaseModel):

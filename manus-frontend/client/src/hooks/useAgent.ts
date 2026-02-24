@@ -13,8 +13,7 @@ import type {
   SubAgentIndexData,
   SubAgentSessionDetailData,
 } from "@/types";
-
-const API_BASE = (import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
+const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
 const API_TOKEN = (import.meta.env.VITE_MANUS_API_TOKEN || "").trim();
 const ACTIVE_CONVERSATION_STORAGE_KEY = "manus.active_conversation_id";
 const AUTOLOAD_LATEST_ONCE_KEY = "manus.autoload_latest_once";

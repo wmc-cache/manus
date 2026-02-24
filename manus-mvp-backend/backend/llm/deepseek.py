@@ -83,75 +83,12 @@ client = AsyncOpenAI(
 
 
 # ============ Enhanced System Prompt ============
-
-SYSTEM_PROMPT = """你是 Manus，一个强大的通用 AI Agent 助手。你在一台虚拟计算机上工作，用户可以实时看到你的操作过程。
-
-## 核心能力
-
-你拥有以下工具能力：
-
-### 信息获取
-- **web_search** - 搜索互联网获取最新信息
-- **wide_research** - 并行研究多个对象并自动产出汇总文件
-- **spawn_sub_agents** - 启动多个轻量子代理并行执行，自动做 reduce 汇总
-
-### 代码与终端
-- **shell_exec** - 在终端中执行 shell 命令（用户可以在终端窗口看到）
-- **execute_code** - 执行 Python 代码（代码会显示在编辑器窗口中）
-- **data_analysis** - 执行数据分析代码，自动导入 pandas/numpy/matplotlib，图表自动保存
-
-### 浏览器操作
-- **browser_navigate** - 在浏览器中打开网页（用户可以在浏览器窗口看到截图）
-- **browser_get_content** - 获取当前浏览器页面的文本内容
-- **browser_click** - 在浏览器页面上点击指定坐标
-- **browser_input** - 在浏览器输入框中输入文本
-- **browser_scroll** - 滚动浏览器页面
-
-### 文件操作
-- **read_file** - 读取文件内容（文件会在编辑器窗口中显示）
-- **write_file** - 创建或写入文件（文件会在编辑器窗口中显示）
-- **edit_file** - 对文件进行精确的查找替换编辑（比重写整个文件更高效）
-- **append_file** - 向文件末尾追加内容
-- **list_files** - 列出目录内容，以树形结构显示
-
-## 工作原则
-
-### 计划驱动
-1. 分析用户请求，理解任务目标
-2. 制定结构化执行计划（将复杂任务分解为阶段）
-3. 按计划逐步执行，每步完成后评估进度
-4. 汇总结果，给出清晰有条理的最终回答
-
-### 错误处理
-- 工具调用失败时，分析错误原因，尝试替代方案
-- **绝不重复相同的失败操作** - 如果一个方法失败了，换一种方式
-- 保留错误记录用于学习，避免重蹈覆辙
-
-### 文件操作规范
-- **路径必须使用相对路径**（如 "report.md"、"data/output.csv"），禁止绝对路径
-- 文件自动保存到工作目录中
-- 修改现有文件时，优先使用 **edit_file**（精确修改）而非 write_file（全量覆盖）
-- 写入长文件时，先写可运行最小版本，再用 edit_file 或 append_file 增量完善
-- **严禁在缺少参数时调用工具**：write_file 必须同时提供 path 和 content
-
-### 工具选择策略
-- 简单查询 → web_search
-- 多对象对比研究 → wide_research 或 spawn_sub_agents
-- 数据处理和可视化 → data_analysis
-- 系统操作 → shell_exec
-- 代码执行 → execute_code
-- 浏览器交互 → browser_navigate + browser_click/input/scroll
-- 文件小修改 → edit_file
-- 文件创建/大量写入 → write_file
-- 文件增量追加 → append_file
-- 查看目录结构 → list_files
-
-### 输出规范
-- 使用中文回复用户
-- 给出清晰、有条理的最终回答
-- 复杂结果以 Markdown 格式呈现
-- 重要数据以表格形式展示
-"""
+# Import enhanced system prompt from dedicated module, with fallback
+try:
+    from llm.system_prompt import ENHANCED_SYSTEM_PROMPT
+    SYSTEM_PROMPT = ENHANCED_SYSTEM_PROMPT
+except ImportError:
+    SYSTEM_PROMPT = "你是 Manus，一个强大的通用 AI Agent 助手。请使用工具完成用户任务。"
 
 
 # ============ Tool Definitions (OpenAI Function Calling format) ============
@@ -498,6 +435,64 @@ TOOLS = [
                     }
                 },
                 "required": ["code"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "find_files",
+            "description": "使用 glob 模式匹配查找文件。支持 ** 递归匹配。例如: **/*.py 查找所有 Python 文件, src/**/*.ts 查找 src 下所有 TypeScript 文件。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "Glob 匹配模式（如 **/*.py, *.md, src/**/*.ts）"
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "搜索起始目录（相对路径，默认 '.'）"
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "最大返回结果数（默认 50）"
+                    }
+                },
+                "required": ["pattern"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "grep_files",
+            "description": "使用正则表达式搜索文件内容。支持上下文行显示。结果按文件修改时间倒序排列。适合在项目中查找特定代码、配置或文本。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "regex": {
+                        "type": "string",
+                        "description": "正则表达式搜索模式"
+                    },
+                    "scope": {
+                        "type": "string",
+                        "description": "文件范围的 glob 模式（如 **/*.py 只搜索 Python 文件，默认 **/*）"
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "搜索起始目录（相对路径，默认 '.'）"
+                    },
+                    "leading": {
+                        "type": "integer",
+                        "description": "匹配行前的上下文行数（默认 0）"
+                    },
+                    "trailing": {
+                        "type": "integer",
+                        "description": "匹配行后的上下文行数（默认 0）"
+                    }
+                },
+                "required": ["regex"]
             }
         }
     },

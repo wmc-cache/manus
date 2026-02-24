@@ -87,6 +87,7 @@ export interface PlanPhaseData {
   id: number;
   title: string;
   status: PlanPhaseStatus;
+  capabilities?: Record<string, boolean>;
 }
 
 export interface TaskPlanData {
@@ -188,8 +189,17 @@ export const TOOL_NAMES: Record<string, string> = {
   browser_navigate: "浏览网页",
   browser_screenshot: "页面截图",
   browser_get_content: "获取页面内容",
+  browser_click: "点击页面元素",
+  browser_input: "输入文本",
+  browser_scroll: "滚动页面",
   read_file: "读取文件",
   write_file: "写入文件",
+  edit_file: "编辑文件",
+  append_file: "追加文件",
+  list_files: "列出目录",
+  find_files: "查找文件",
+  grep_files: "搜索内容",
+  data_analysis: "数据分析",
 };
 
 export const TOOL_ICONS: Record<string, string> = {
@@ -201,6 +211,15 @@ export const TOOL_ICONS: Record<string, string> = {
   browser_navigate: "Globe",
   browser_screenshot: "Camera",
   browser_get_content: "FileText",
+  browser_click: "MousePointer",
+  browser_input: "Keyboard",
+  browser_scroll: "ArrowDown",
   read_file: "FileText",
   write_file: "FilePlus",
+  edit_file: "FileEdit",
+  append_file: "FilePlus2",
+  list_files: "FolderTree",
+  find_files: "Search",
+  grep_files: "FileSearch",
+  data_analysis: "BarChart3",
 };
