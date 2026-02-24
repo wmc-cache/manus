@@ -116,10 +116,10 @@ export default function EmptyState({ onSuggestionClick }: EmptyStateProps) {
         transition={{ duration: 0.5, ease: [0.23, 1, 0.32, 1] }}
         className="text-center max-w-lg"
       >
-        <ManusLogo />
+        {/* <ManusLogo /> */}
 
-        <h2 className="text-xl font-semibold text-foreground mb-2">
-          你好，我是 Manus
+        <h2 className="text-xl font-semibold text-foreground mb-50">
+          {/* 你好，我是 Manus */}
         </h2>
         <p className="text-sm text-muted-foreground mb-8 leading-relaxed">
           我是一个 AI Agent，可以搜索信息、执行代码、读写文件。

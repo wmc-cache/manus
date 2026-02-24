@@ -41,22 +41,42 @@ def _read_env_key_from_file(path: Path, key: str) -> str:
     return ""
 
 
-def _resolve_deepseek_api_key() -> str:
-    env_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
-    if env_key:
-        return env_key
+def _resolve_multi_key(keys: tuple[str, ...], default: str = "") -> str:
+    for key_name in keys:
+        env_value = os.environ.get(key_name, "").strip()
+        if env_value:
+            return env_value
+
     backend_env = Path(__file__).resolve().parents[1] / ".env"
-    file_key = _read_env_key_from_file(backend_env, "DEEPSEEK_API_KEY")
-    if file_key:
-        return file_key
+    for key_name in keys:
+        file_value = _read_env_key_from_file(backend_env, key_name)
+        if file_value:
+            return file_value
+
     frontend_env = Path(__file__).resolve().parents[3] / "manus-frontend" / ".env"
-    return _read_env_key_from_file(frontend_env, "DEEPSEEK_API_KEY")
+    for key_name in keys:
+        file_value = _read_env_key_from_file(frontend_env, key_name)
+        if file_value:
+            return file_value
+
+    return default
+
+
+def _resolve_deepseek_api_key() -> str:
+    # Claude-compatible env first, then legacy DeepSeek env.
+    return _resolve_multi_key(("CLAUDE_API_KEY", "DEEPSEEK_API_KEY"), default="")
 
 
 # DeepSeek API 配置
 DEEPSEEK_API_KEY = _resolve_deepseek_api_key()
-DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com").strip()
-DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat").strip()
+DEEPSEEK_BASE_URL = _resolve_multi_key(
+    ("CLAUDE_BASE_URL", "DEEPSEEK_BASE_URL"),
+    default="https://api.deepseek.com",
+)
+DEEPSEEK_MODEL = _resolve_multi_key(
+    ("CLAUDE_MODEL", "DEEPSEEK_MODEL"),
+    default="deepseek-chat",
+)
 
 
 def _read_int_env(name: str, default: int, minimum: int = 1) -> int:
@@ -816,7 +836,7 @@ async def chat_completion_stream(
     if not DEEPSEEK_API_KEY:
         yield {
             "type": "error",
-            "data": "DEEPSEEK_API_KEY 未配置，请在环境变量或 .env 中设置后重启后端。"
+            "data": "LLM API Key 未配置，请在环境变量或 .env 中设置 CLAUDE_API_KEY 或 DEEPSEEK_API_KEY 后重启后端。"
         }
         return
 
@@ -906,7 +926,7 @@ async def chat_completion(
     """非流式调用 DeepSeek API（带重试）"""
     if not DEEPSEEK_API_KEY:
         return {
-            "content": "调用 LLM 时出错: DEEPSEEK_API_KEY 未配置，请在环境变量或 .env 中设置后重启后端。",
+            "content": "调用 LLM 时出错: 未配置 API Key。请在环境变量或 .env 中设置 CLAUDE_API_KEY 或 DEEPSEEK_API_KEY 后重启后端。",
             "tool_calls": []
         }
 
