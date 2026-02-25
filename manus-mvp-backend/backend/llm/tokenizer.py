@@ -1,8 +1,6 @@
 """
-Token counting utilities for precise context budget management.
-
-Uses tiktoken for accurate token counting, with fallback to character-based
-estimation when tiktoken is unavailable.
+用于精确上下文预算管理的令牌计数实用程序。
+使用tiktoken进行准确的令牌计数，并退回到基于字符的tiktoken不可用时的估计。
 """
 import logging
 from typing import Any, Dict, List, Optional
