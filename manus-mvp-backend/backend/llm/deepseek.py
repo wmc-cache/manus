@@ -527,7 +527,8 @@ def _parse_tool_arguments(raw_arguments: Any) -> Tuple[Dict[str, Any], Optional[
         return raw_arguments, None, ""
 
     if raw_arguments is None:
-        return {}, "参数为空，无法解析 JSON。", ""
+        # 一些模型对无参工具会返回 null / 空值，按空对象处理。
+        return {}, None, ""
 
     if not isinstance(raw_arguments, str):
         preview = str(raw_arguments)[:300]
@@ -535,7 +536,8 @@ def _parse_tool_arguments(raw_arguments: Any) -> Tuple[Dict[str, Any], Optional[
 
     text = raw_arguments.strip()
     if not text:
-        return {}, "参数为空字符串，无法解析 JSON。", ""
+        # 一些模型对无参工具会返回空字符串，按空对象处理。
+        return {}, None, ""
 
     try:
         parsed = json.loads(text)
@@ -544,6 +546,8 @@ def _parse_tool_arguments(raw_arguments: Any) -> Tuple[Dict[str, Any], Optional[
         return {}, f"参数 JSON 解析失败（位置 {e.pos}）: {e.msg}", preview
 
     if not isinstance(parsed, dict):
+        if parsed is None:
+            return {}, None, ""
         return {}, f"参数解析后不是 JSON 对象，而是 {type(parsed).__name__}。", str(parsed)[:300]
 
     return parsed, None, ""

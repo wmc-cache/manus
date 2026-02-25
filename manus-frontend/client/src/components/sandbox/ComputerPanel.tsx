@@ -92,6 +92,8 @@ interface ComputerPanelProps {
   fileTree: FileNode[];
   onFileClick?: (path: string) => void;
   onRefreshFiles?: () => void;
+  onDownloadAllFiles?: () => void;
+  downloadingAllFiles?: boolean;
   manualTakeoverEnabled?: boolean;
   manualTakeoverTarget?: ManualTakeoverTarget;
   onToggleManualTakeover?: (enabled: boolean, target?: ManualTakeoverTarget) => void;
@@ -124,6 +126,8 @@ export default function ComputerPanel({
   fileTree,
   onFileClick,
   onRefreshFiles,
+  onDownloadAllFiles,
+  downloadingAllFiles = false,
   manualTakeoverEnabled = false,
   manualTakeoverTarget = "all",
   onToggleManualTakeover,
@@ -325,6 +329,8 @@ export default function ComputerPanel({
                     tree={fileTree}
                     onFileClick={onFileClick}
                     onRefresh={onRefreshFiles}
+                    onDownloadAll={onDownloadAllFiles}
+                    downloadingAll={downloadingAllFiles}
                   />
                 </div>
                 <div className="flex-1 min-w-0">

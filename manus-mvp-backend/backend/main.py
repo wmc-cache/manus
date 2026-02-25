@@ -5,6 +5,8 @@ import os
 import asyncio
 import re
 import logging
+import io
+import zipfile
 from datetime import datetime
 from pathlib import Path
 
@@ -20,7 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from sse_starlette.sse import EventSourceResponse
 from models.schemas import ChatRequest, SSEEventType
 from agent.core import agent_engine
@@ -687,6 +689,41 @@ async def get_files(conversation_id: str = Query(None)):
     tree = await get_file_tree(conversation_id)
     root = get_workspace_root(conversation_id)
     return {"root": root, "tree": tree}
+
+
+@app.get("/api/sandbox/files/download")
+async def download_all_files(conversation_id: str = Query(None)):
+    """下载当前会话工作目录中的全部文件（ZIP）。"""
+    root = Path(get_workspace_root(conversation_id)).resolve()
+    if not root.exists() or not root.is_dir():
+        raise HTTPException(status_code=404, detail="工作目录不存在")
+
+    def _build_zip_bytes() -> bytes:
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+            file_count = 0
+            for path in root.rglob("*"):
+                if not path.is_file():
+                    continue
+                try:
+                    resolved = path.resolve()
+                except OSError:
+                    continue
+                if resolved != root and root not in resolved.parents:
+                    continue
+
+                rel_path = resolved.relative_to(root).as_posix()
+                zf.write(str(resolved), arcname=rel_path)
+                file_count += 1
+
+            if file_count == 0:
+                zf.writestr("README.txt", "Workspace is empty.")
+        return buffer.getvalue()
+
+    archive_bytes = await asyncio.to_thread(_build_zip_bytes)
+    filename = f"{root.name}_files_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    return StreamingResponse(io.BytesIO(archive_bytes), media_type="application/zip", headers=headers)
 
 
 @app.get("/api/sandbox/files/content")

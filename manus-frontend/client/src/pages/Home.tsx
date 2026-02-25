@@ -326,6 +326,8 @@ export default function Home() {
                   fileTree={sandbox.fileTree}
                   onFileClick={sandbox.fetchFileContent}
                   onRefreshFiles={sandbox.fetchFileTree}
+                  onDownloadAllFiles={sandbox.downloadAllFiles}
+                  downloadingAllFiles={sandbox.downloadingAllFiles}
                   manualTakeoverEnabled={sandbox.manualTakeoverEnabled}
                   manualTakeoverTarget={sandbox.manualTakeoverTarget}
                   onToggleManualTakeover={sandbox.setManualTakeover}
@@ -641,6 +643,8 @@ export default function Home() {
                 fileTree={sandbox.fileTree}
                 onFileClick={sandbox.fetchFileContent}
                 onRefreshFiles={sandbox.fetchFileTree}
+                onDownloadAllFiles={sandbox.downloadAllFiles}
+                downloadingAllFiles={sandbox.downloadingAllFiles}
                 manualTakeoverEnabled={sandbox.manualTakeoverEnabled}
                 manualTakeoverTarget={sandbox.manualTakeoverTarget}
                 onToggleManualTakeover={sandbox.setManualTakeover}

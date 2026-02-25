@@ -17,6 +17,27 @@ function buildAuthHeaders(base: Record<string, string> = {}): Record<string, str
   return { ...base, Authorization: `Bearer ${API_TOKEN}` };
 }
 
+function parseDownloadFilename(contentDisposition: string | null, fallback: string): string {
+  const text = (contentDisposition || "").trim();
+  if (!text) return fallback;
+
+  const utf8Match = text.match(/filename\*\s*=\s*UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1]);
+    } catch {
+      return utf8Match[1];
+    }
+  }
+
+  const basicMatch = text.match(/filename\s*=\s*"?([^";]+)"?/i);
+  if (basicMatch?.[1]) {
+    return basicMatch[1];
+  }
+
+  return fallback;
+}
+
 /** 文件树刷新防抖间隔（毫秒） */
 const FILE_TREE_DEBOUNCE_MS = 500;
 
@@ -75,6 +96,7 @@ export function useSandbox() {
   const [manualTakeoverTarget, setManualTakeoverTarget] = useState<ManualTakeoverTarget>("all");
   const [manualBlockedReason, setManualBlockedReason] = useState<string | null>(null);
   const [browserInteractionError, setBrowserInteractionError] = useState<string | null>(null);
+  const [downloadingAllFiles, setDownloadingAllFiles] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -392,6 +414,57 @@ export function useSandbox() {
     }
   }, []);
 
+  const downloadAllFiles = useCallback(async () => {
+    if (downloadingAllFiles) return;
+    setDownloadingAllFiles(true);
+    try {
+      const convId = currentConvIdRef.current;
+      const params = new URLSearchParams();
+      if (convId) {
+        params.set("conversation_id", convId);
+      }
+      const query = params.toString();
+      const endpoint = `${API_BASE}/api/sandbox/files/download${query ? `?${query}` : ""}`;
+
+      const res = await fetch(endpoint, {
+        headers: buildAuthHeaders(),
+      });
+      if (!res.ok) {
+        let message = `下载失败 (HTTP ${res.status})`;
+        try {
+          const payload = await res.json();
+          if (payload?.detail && typeof payload.detail === "string") {
+            message = payload.detail;
+          }
+        } catch {
+          // ignore parse error
+        }
+        throw new Error(message);
+      }
+
+      const blob = await res.blob();
+      const filename = parseDownloadFilename(
+        res.headers.get("content-disposition"),
+        `${convId || "workspace"}_files.zip`,
+      );
+
+      const url = window.URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = filename;
+      anchor.style.display = "none";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error("downloadAllFiles failed:", error);
+    } finally {
+      setDownloadingAllFiles(false);
+    }
+  }, [downloadingAllFiles]);
+
   // 初始化
   useEffect(() => {
     connect();
@@ -418,6 +491,7 @@ export function useSandbox() {
     manualTakeoverTarget,
     manualBlockedReason,
     browserInteractionError,
+    downloadingAllFiles,
     setManualTakeover,
     sendTerminalInput,
     browserClick,
@@ -426,6 +500,7 @@ export function useSandbox() {
     browserKey,
     fetchFileTree,
     fetchFileContent,
+    downloadAllFiles,
     switchConversation,
   };
 }

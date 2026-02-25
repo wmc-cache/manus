@@ -133,9 +133,9 @@ export default function ChatInput({
         </label>
       </div>
 
-      <p className="text-center text-xs text-muted-foreground/40 mt-2">
+      {/* <p className="text-center text-xs text-muted-foreground/40 mt-2">
         Manus MVP · Powered by DeepSeek
-      </p>
+      </p> */}
     </div>
   );
 }

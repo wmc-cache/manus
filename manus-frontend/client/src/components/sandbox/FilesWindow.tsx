@@ -17,6 +17,7 @@ import {
   ChevronDown,
   HardDrive,
   RefreshCw,
+  Download,
 } from "lucide-react";
 import type { FileNode } from "@/hooks/useSandbox";
 
@@ -24,6 +25,8 @@ interface FilesWindowProps {
   tree: FileNode[];
   onFileClick?: (path: string) => void;
   onRefresh?: () => void;
+  onDownloadAll?: () => void;
+  downloadingAll?: boolean;
 }
 
 function getFileIcon(icon: string, isOpen?: boolean) {
@@ -129,7 +132,13 @@ function FileTreeItem({
   );
 }
 
-export default function FilesWindow({ tree, onFileClick, onRefresh }: FilesWindowProps) {
+export default function FilesWindow({
+  tree,
+  onFileClick,
+  onRefresh,
+  onDownloadAll,
+  downloadingAll = false,
+}: FilesWindowProps) {
   return (
     <div className="h-full flex flex-col bg-[oklch(0.1_0.01_260)] rounded-lg overflow-hidden">
       {/* 头部 */}
@@ -140,12 +149,23 @@ export default function FilesWindow({ tree, onFileClick, onRefresh }: FilesWindo
             /workspace
           </span>
         </div>
-        <button
-          onClick={onRefresh}
-          className="p-1 rounded hover:bg-accent/30 transition-colors"
-        >
-          <RefreshCw className="w-3.5 h-3.5 text-muted-foreground" />
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={onDownloadAll}
+            className="p-1 rounded hover:bg-accent/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            title="下载全部文件"
+            disabled={!onDownloadAll || downloadingAll}
+          >
+            <Download className={`w-3.5 h-3.5 text-muted-foreground ${downloadingAll ? "animate-pulse" : ""}`} />
+          </button>
+          <button
+            onClick={onRefresh}
+            className="p-1 rounded hover:bg-accent/30 transition-colors"
+            title="刷新文件列表"
+          >
+            <RefreshCw className="w-3.5 h-3.5 text-muted-foreground" />
+          </button>
+        </div>
       </div>
 
       {/* 文件树 */}
