@@ -163,6 +163,15 @@ interface ConversationDetailResponse {
   created_at: string;
 }
 
+interface CreateConversationResponse {
+  id: string;
+  title: string;
+  message_count: number;
+  created_at: string;
+  awaiting_resume?: boolean;
+  resume_pending?: boolean;
+}
+
 type ConversationDetailMessage = NonNullable<ConversationDetailResponse["messages"]>[number];
 
 function normalizeConversations(payload: ConversationListResponse): Conversation[] {
@@ -521,6 +530,61 @@ export function useAgent() {
       return null;
     }
   }, []);
+
+  const createConversation = useCallback(async (): Promise<string | null> => {
+    abortControllerRef.current?.abort();
+
+    try {
+      const response = await fetch(`${API_BASE}/api/conversations`, {
+        method: "POST",
+        headers: buildAuthHeaders({ "Content-Type": "application/json" }),
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const data = (await response.json()) as CreateConversationResponse;
+      if (!data?.id) {
+        throw new Error("创建会话失败：响应缺少会话 ID");
+      }
+
+      interruptedConversationRef.current[data.id] = false;
+      awaitingResumeConversationRef.current[data.id] = Boolean(data.awaiting_resume);
+      resumePendingConversationRef.current[data.id] = Boolean(data.resume_pending);
+      messageCountConversationRef.current[data.id] = 0;
+
+      setState((prev) => ({
+        ...prev,
+        messages: [],
+        isLoading: false,
+        isThinking: false,
+        thinkingStatus: null,
+        currentToolCall: null,
+        conversationId: data.id,
+        error: null,
+        iteration: 0,
+        limitReached: false,
+        continueMessage: null,
+        plan: null,
+        planReason: null,
+        todoPath: null,
+        subAgentIndex: null,
+      }));
+
+      safeSetLocalStorage(ACTIVE_CONVERSATION_STORAGE_KEY, data.id);
+      safeRemoveLocalStorage(AUTOLOAD_LATEST_ONCE_KEY);
+      clearPendingExecutionMarker();
+
+      await fetchConversations();
+      return data.id;
+    } catch (err) {
+      setState((prev) => ({
+        ...prev,
+        error: err instanceof Error ? err.message : "创建会话失败",
+      }));
+      return null;
+    }
+  }, [fetchConversations]);
 
   const sendMessage = useCallback(async (message: string, options?: SendMessageOptions) => {
     const controlContinue = Boolean(
@@ -1052,6 +1116,7 @@ export function useAgent() {
 
   return {
     ...state,
+    createConversation,
     sendMessage,
     continueAgent,
     deleteConversation,

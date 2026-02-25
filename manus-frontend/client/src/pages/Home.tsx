@@ -91,10 +91,10 @@ export default function Home() {
     sendMessage,
     loadConversation,
     loadSubAgentSession,
+    createConversation,
     continueAgent,
     deleteConversation,
     stopAgent,
-    clearMessages,
   } = useAgent();
 
   const sandbox = useSandbox();
@@ -143,11 +143,8 @@ export default function Home() {
   }, [conversationId]);
 
   const handleNewChat = useCallback(() => {
-    clearMessages();
-    // 新对话时重置计算机窗口
-    sandbox.switchConversation(null);
-    prevConvIdRef.current = null;
-  }, [clearMessages, sandbox.switchConversation]);
+    void createConversation();
+  }, [createConversation]);
 
   const handleSendMessage = useCallback((text: string, options?: { deepResearch?: boolean }) => {
     if (options?.deepResearch) {

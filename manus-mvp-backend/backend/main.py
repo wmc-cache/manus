@@ -103,6 +103,33 @@ def _is_authorized_ws(websocket: WebSocket) -> bool:
     return bool(token) and token == API_TOKEN
 
 
+def _schedule_docker_preheat(conversation_id: str) -> bool:
+    """异步预热指定会话的 Docker 沙箱容器。"""
+    try:
+        from sandbox.docker_tools_adapter import DOCKER_SANDBOX_ENABLED
+        if not DOCKER_SANDBOX_ENABLED:
+            return False
+
+        from sandbox.docker_sandbox import sandbox_manager
+
+        async def _preheat_sandbox():
+            try:
+                if not sandbox_manager._initialized:
+                    await sandbox_manager.initialize()
+                await sandbox_manager.get_or_create(conversation_id)
+                logging.getLogger("main").info(
+                    "对话 [%s] Docker 沙箱容器预热完成", conversation_id
+                )
+            except Exception as _e:
+                logging.getLogger("main").warning("沙箱预热失败: %s", _e)
+
+        asyncio.create_task(_preheat_sandbox())
+        return True
+    except Exception as _e:
+        logging.getLogger("main").warning("无法调度 Docker 沙箱预热: %s", _e)
+        return False
+
+
 def _load_sub_agent_index(conversation_id: str):
     """
     读取子代理会话索引文件（若存在）。
@@ -186,24 +213,8 @@ async def chat(request: ChatRequest):
     conversation_lock = agent_engine.get_conversation_lock(conversation.id)
     is_control_continue = bool(request.control_continue)
 
-    # 对话创建后立即异步预热 Docker 沙箱容器，使监控仪表盘即刻可见
-    try:
-        from sandbox.docker_tools_adapter import DOCKER_SANDBOX_ENABLED
-        if DOCKER_SANDBOX_ENABLED:
-            from sandbox.docker_sandbox import sandbox_manager
-            async def _preheat_sandbox():
-                try:
-                    if not sandbox_manager._initialized:
-                        await sandbox_manager.initialize()
-                    await sandbox_manager.get_or_create(conversation.id)
-                    logging.getLogger("main").info(
-                        "对话 [%s] Docker 沙箱容器预热完成", conversation.id
-                    )
-                except Exception as _e:
-                    logging.getLogger("main").warning("沙箱预热失败: %s", _e)
-            asyncio.create_task(_preheat_sandbox())
-    except Exception:
-        pass
+    # 对话创建后立即异步预热 Docker 沙箱容器，使监控仪表盘可见
+    _schedule_docker_preheat(conversation.id)
 
     async def event_generator():
         registered_resume = False
@@ -324,6 +335,21 @@ async def list_conversations():
         })
     convs.sort(key=lambda x: x["created_at"], reverse=True)
     return {"conversations": convs}
+
+
+@app.post("/api/conversations")
+async def create_conversation():
+    """创建新对话并尝试预热沙箱容器。"""
+    conv = agent_engine.get_or_create_conversation()
+    _schedule_docker_preheat(conv.id)
+    return {
+        "id": conv.id,
+        "title": conv.title,
+        "message_count": len(conv.messages),
+        "created_at": conv.created_at.isoformat(),
+        "awaiting_resume": conv.awaiting_resume,
+        "resume_pending": conv.resume_pending,
+    }
 
 
 @app.get("/api/conversations/{conversation_id}")

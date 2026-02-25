@@ -1,0 +1,10 @@
+FROM langgenius/dify-sandbox:0.2.12
+
+USER root
+
+RUN mkdir -p /tmp/workspace /home/ubuntu && chmod 777 /tmp/workspace || true
+
+WORKDIR /tmp/workspace
+
+ENTRYPOINT []
+CMD ["sleep", "infinity"]
