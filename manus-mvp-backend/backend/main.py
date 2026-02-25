@@ -30,6 +30,20 @@ from sandbox.event_bus import event_bus, SandboxEvent
 from sandbox.filesystem import get_file_tree, read_file_content, get_workspace_root, delete_workspace
 from sandbox.browser import browser_service
 
+# 监控 API
+try:
+    from sandbox.monitor_api import register_monitor_api
+    _HAS_MONITOR = True
+except ImportError:
+    _HAS_MONITOR = False
+
+# Docker 沙箱补丁
+try:
+    from agent.tools_docker_patch import apply_docker_sandbox_patch
+    apply_docker_sandbox_patch()
+except Exception as _docker_patch_err:
+    logging.getLogger("main").warning("无法应用 Docker 沙箱补丁，将使用进程级沙箱: %s", _docker_patch_err)
+
 app = FastAPI(
     title="Manus MVP",
     description="AI Agent 系统 MVP - 含计算机窗口（会话隔离）",
@@ -171,6 +185,25 @@ async def chat(request: ChatRequest):
     conversation = agent_engine.get_or_create_conversation(request.conversation_id)
     conversation_lock = agent_engine.get_conversation_lock(conversation.id)
     is_control_continue = bool(request.control_continue)
+
+    # 对话创建后立即异步预热 Docker 沙箱容器，使监控仪表盘即刻可见
+    try:
+        from sandbox.docker_tools_adapter import DOCKER_SANDBOX_ENABLED
+        if DOCKER_SANDBOX_ENABLED:
+            from sandbox.docker_sandbox import sandbox_manager
+            async def _preheat_sandbox():
+                try:
+                    if not sandbox_manager._initialized:
+                        await sandbox_manager.initialize()
+                    await sandbox_manager.get_or_create(conversation.id)
+                    logging.getLogger("main").info(
+                        "对话 [%s] Docker 沙箱容器预热完成", conversation.id
+                    )
+                except Exception as _e:
+                    logging.getLogger("main").warning("沙箱预热失败: %s", _e)
+            asyncio.create_task(_preheat_sandbox())
+    except Exception:
+        pass
 
     async def event_generator():
         registered_resume = False
@@ -381,6 +414,14 @@ async def delete_conversation(conversation_id: str):
 
     if not delete_workspace(conversation_id):
         cleanup_warnings.append("workspace_cleanup_failed")
+
+    # 销毁对应的 Docker 沙箱容器
+    try:
+        from sandbox.docker_tools_adapter import _is_docker_available, sandbox_manager
+        if _is_docker_available():
+            await sandbox_manager.destroy_container(conversation_id)
+    except Exception as e:
+        cleanup_warnings.append(f"docker_container_cleanup_failed: {e}")
 
     return {"ok": True, "id": conversation_id, "warnings": cleanup_warnings}
 
@@ -748,6 +789,11 @@ async def get_sandbox_status():
         "browser": browser_service.get_status(),
         "workspace_base": "/tmp/manus_workspace",
     }
+
+
+# ============ 注册监控 API ============
+if _HAS_MONITOR:
+    register_monitor_api(app)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,77 @@
+# ============================================================
+# Manus MVP Docker Compose 配置
+# ============================================================
+# 包含：后端服务 + 前端服务 + 沙箱网络
+# 沙箱容器由后端动态创建，不在此处静态定义
+# ============================================================
+
+version: "3.8"
+
+services:
+  # ---- 后端 API 服务 ----
+  backend:
+    build:
+      context: ../manus-mvp-backend/backend
+      dockerfile: ../../docker/backend/Dockerfile
+    container_name: manus-backend
+    ports:
+      - "8000:8000"
+    environment:
+      # Docker 沙箱配置
+      - MANUS_DOCKER_SANDBOX=true
+      - MANUS_SANDBOX_IMAGE=manus-sandbox:latest
+      - MANUS_SANDBOX_NETWORK=manus-sandbox-net
+      - MANUS_HOST_WORKSPACE_BASE=/tmp/manus_workspace
+      # 容器资源限制
+      - MANUS_CONTAINER_MEM_LIMIT=512m
+      - MANUS_CONTAINER_CPU_QUOTA=100000
+      - MANUS_CONTAINER_IDLE_TIMEOUT=600
+      # API 配置
+      - MANUS_ALLOWED_ORIGINS=*
+      # LLM 配置（从 .env 文件读取）
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - TAVILY_API_KEY=${TAVILY_API_KEY:-}
+    volumes:
+      # 挂载 Docker socket 以便后端管理沙箱容器
+      - /var/run/docker.sock:/var/run/docker.sock
+      # 挂载 workspace 根目录
+      - manus-workspace:/tmp/manus_workspace
+    networks:
+      - manus-net
+      - manus-sandbox-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ---- 前端服务 ----
+  frontend:
+    build:
+      context: ../manus-frontend
+      dockerfile: ../docker/frontend/Dockerfile
+    container_name: manus-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - VITE_API_BASE_URL=http://backend:8000
+    networks:
+      - manus-net
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  manus-workspace:
+    driver: local
+
+networks:
+  manus-net:
+    driver: bridge
+  manus-sandbox-net:
+    driver: bridge
+    name: manus-sandbox-net
