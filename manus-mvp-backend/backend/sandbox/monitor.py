@@ -40,6 +40,9 @@ ALERT_COOLDOWN = int(os.environ.get("MANUS_ALERT_COOLDOWN", "60"))
 # 最大告警历史条数
 MAX_ALERT_HISTORY = 200
 
+# Docker 命令超时（秒）
+DOCKER_CMD_TIMEOUT = float(os.environ.get("MANUS_MONITOR_DOCKER_TIMEOUT", "8"))
+
 # ---------------------------------------------------------------------------
 # 告警阈值配置
 # ---------------------------------------------------------------------------
@@ -394,6 +397,7 @@ class SandboxMonitor:
 
     async def _list_sandbox_containers(self) -> List[Dict[str, str]]:
         """列出所有 manus-sandbox 容器"""
+        proc: Optional[asyncio.subprocess.Process] = None
         try:
             proc = await asyncio.create_subprocess_exec(
                 "docker", "ps", "-a",
@@ -402,7 +406,7 @@ class SandboxMonitor:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await proc.communicate()
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=DOCKER_CMD_TIMEOUT)
             if proc.returncode != 0:
                 logger.error("docker ps 返回错误 (code=%d): %s", proc.returncode, stderr.decode())
                 return []
@@ -419,6 +423,15 @@ class SandboxMonitor:
                         "status": parts[2],
                     })
             return containers
+        except asyncio.TimeoutError:
+            if proc and proc.returncode is None:
+                proc.kill()
+                try:
+                    await proc.communicate()
+                except Exception:
+                    pass
+            logger.warning("docker ps 执行超时（>%ss），本轮返回空容器列表", DOCKER_CMD_TIMEOUT)
+            return []
         except Exception as e:
             logger.error("列出容器失败: %s", e)
             return []

@@ -311,6 +311,7 @@ async def chat(request: ChatRequest):
 @app.get("/api/conversations")
 async def list_conversations():
     """获取对话列表"""
+    agent_engine.repair_conversation_titles()
     convs = []
     for conv in agent_engine.conversations.values():
         running_phase = None
@@ -355,6 +356,7 @@ async def create_conversation():
 @app.get("/api/conversations/{conversation_id}")
 async def get_conversation(conversation_id: str):
     """获取对话详情"""
+    agent_engine.repair_conversation_titles()
     if conversation_id not in agent_engine.conversations:
         raise HTTPException(status_code=404, detail="对话不存在")
 

@@ -292,8 +292,17 @@ class DockerSandboxManager:
 
             if sandbox and sandbox.status == "stopped":
                 # 唤醒已休眠的容器
-                await self._start_container(sandbox)
-                return sandbox
+                try:
+                    await self._start_container(sandbox)
+                    return sandbox
+                except Exception as e:
+                    # 容器可能已被外部删除，回退到残留检测/重建流程
+                    logger.warning(
+                        "唤醒缓存容器失败 [%s]: %s，尝试重建",
+                        sandbox.container_name,
+                        e,
+                    )
+                    self._sandboxes.pop(cid, None)
 
             # 检查是否有残留容器
             container_name = _container_name(cid)
@@ -458,19 +467,30 @@ class DockerSandboxManager:
         """销毁指定会话的容器（不删除 workspace 数据）。"""
         cid = _normalize_conversation_id(conversation_id)
         sandbox = self._sandboxes.pop(cid, None)
-        if not sandbox:
-            return
+        container_name = sandbox.container_name if sandbox else _container_name(cid)
 
+        # 兼容服务重启场景：即使 _sandboxes 内无状态，也尝试按容器名查找并删除。
+        container_id = await self._find_container(container_name)
+        if not container_id:
+            return
         try:
             proc = await asyncio.create_subprocess_exec(
-                "docker", "rm", "-f", sandbox.container_name,
+                "docker", "rm", "-f", container_name,
                 stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
             )
-            await asyncio.wait_for(proc.wait(), timeout=10)
-            logger.info("沙箱容器已销毁: %s", sandbox.container_name)
+            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
+            if proc.returncode == 0:
+                logger.info("沙箱容器已销毁: %s", container_name)
+            else:
+                logger.warning(
+                    "销毁容器失败 [%s] (code=%s): %s",
+                    container_name,
+                    proc.returncode,
+                    stderr.decode(errors="replace").strip(),
+                )
         except Exception as e:
-            logger.warning("销毁容器异常 [%s]: %s", sandbox.container_name, e)
+            logger.warning("销毁容器异常 [%s]: %s", container_name, e)
 
     async def destroy_all(self):
         """销毁所有沙箱容器。"""

@@ -71,6 +71,8 @@ MAX_RECENT_MESSAGE_CHARS = int(os.environ.get("MANUS_MAX_RECENT_MESSAGE_CHARS", 
 MAX_OLD_MESSAGE_CHARS = int(os.environ.get("MANUS_MAX_OLD_MESSAGE_CHARS", "1200"))
 TODO_FILENAME = "todo.md"
 CONTINUE_MESSAGES = {"继续", "继续。", "continue", "continue.", "go on"}
+DEFAULT_CONVERSATION_TITLE = "新对话"
+MAX_CONVERSATION_TITLE_CHARS = int(os.environ.get("MANUS_MAX_CONVERSATION_TITLE_CHARS", "50"))
 
 # 可安全并行执行的工具（只读/无副作用）
 PARALLEL_SAFE_TOOLS = {
@@ -142,10 +144,15 @@ class AgentEngine:
             payload = json.loads(self._store_path.read_text(encoding="utf-8"))
             items = payload.get("conversations", [])
             loaded: Dict[str, Conversation] = {}
+            repaired = False
             for raw in items:
                 conv = Conversation.model_validate(raw)
+                if self._maybe_refresh_conversation_title(conv):
+                    repaired = True
                 loaded[conv.id] = conv
             self.conversations = loaded
+            if repaired:
+                self._save_conversations()
         except Exception:
             # 文件损坏或格式不兼容时，不阻塞服务启动
             self.conversations = {}
@@ -189,11 +196,57 @@ class AgentEngine:
     def get_or_create_conversation(self, conversation_id: Optional[str] = None) -> Conversation:
         """获取或创建对话"""
         if conversation_id and conversation_id in self.conversations:
-            return self.conversations[conversation_id]
+            conv = self.conversations[conversation_id]
+            if self._maybe_refresh_conversation_title(conv):
+                self._save_conversations()
+            return conv
         conv = Conversation()
         self.conversations[conv.id] = conv
         self._save_conversations()
         return conv
+
+    @staticmethod
+    def _normalize_conversation_title(text: str) -> str:
+        normalized = " ".join((text or "").strip().split())
+        if not normalized:
+            return DEFAULT_CONVERSATION_TITLE
+        if len(normalized) <= MAX_CONVERSATION_TITLE_CHARS:
+            return normalized
+        return normalized[:MAX_CONVERSATION_TITLE_CHARS].rstrip() + "…"
+
+    def _maybe_refresh_conversation_title(
+        self,
+        conversation: Conversation,
+        preferred_source: Optional[str] = None,
+    ) -> bool:
+        current = (conversation.title or "").strip()
+        if current and current != DEFAULT_CONVERSATION_TITLE:
+            return False
+
+        source = (preferred_source or "").strip()
+        if not source:
+            for msg in conversation.messages:
+                if msg.role == MessageRole.USER and msg.content.strip():
+                    source = msg.content
+                    break
+        if not source:
+            return False
+
+        next_title = self._normalize_conversation_title(source)
+        if next_title == current:
+            return False
+        conversation.title = next_title
+        return True
+
+    def repair_conversation_titles(self) -> bool:
+        """回填旧会话标题：默认标题但有首条用户消息时自动修复。"""
+        repaired = False
+        for conv in self.conversations.values():
+            if self._maybe_refresh_conversation_title(conv):
+                repaired = True
+        if repaired:
+            self._save_conversations()
+        return repaired
 
     async def delete_conversation(self, conversation_id: str) -> tuple[bool, str]:
         """删除会话。若会话正在执行，返回 busy。"""
@@ -642,9 +695,9 @@ class AgentEngine:
         # 更新计划（初始化或恢复）
         plan_reason = await self._ensure_plan_for_turn(conversation, user_message)
 
-        # 如果是第一条真实用户消息，设置对话标题
-        if record_user_message and len(conversation.messages) == 1:
-            conversation.title = user_message[:50]
+        # 若当前仍为默认标题，则使用首条用户消息回填（兼容历史脏数据）
+        if record_user_message:
+            self._maybe_refresh_conversation_title(conversation, preferred_source=user_message)
         self._save_conversations()
 
         # 发送对话 ID
