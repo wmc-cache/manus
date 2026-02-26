@@ -106,7 +106,16 @@ export default function Home() {
   const [subAgentSessionLoading, setSubAgentSessionLoading] = useState(false);
   const [subAgentSessionError, setSubAgentSessionError] = useState<string | null>(null);
   const [activeSubAgentSession, setActiveSubAgentSession] = useState<SubAgentSessionDetailData | null>(null);
+  const [previewDragConstraints, setPreviewDragConstraints] = useState({
+    top: -64,
+    left: -1200,
+    right: 16,
+    bottom: 800,
+  });
+  const layoutRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const previewDragBlockedRef = useRef(false);
+  const previewDragResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 记录上一次的 conversationId，用于检测变化
   const prevConvIdRef = useRef<string | null>(null);
 
@@ -141,6 +150,42 @@ export default function Home() {
     setSubAgentSessionError(null);
     setActiveSubAgentSession(null);
   }, [conversationId]);
+
+  useEffect(() => {
+    const recalcPreviewDragConstraints = () => {
+      const el = layoutRef.current;
+      if (!el) return;
+      const containerWidth = el.clientWidth;
+      const containerHeight = el.clientHeight;
+      const isSm = window.matchMedia("(min-width: 640px)").matches;
+      const previewWidth = isSm ? 330 : 300;
+      const previewHeight = isSm ? 220 : 200;
+      const initialRight = 16;
+      const initialTop = 64;
+      const initialLeft = Math.max(0, containerWidth - previewWidth - initialRight);
+
+      setPreviewDragConstraints({
+        top: -initialTop,
+        left: -initialLeft,
+        right: Math.max(0, containerWidth - previewWidth - initialLeft),
+        bottom: Math.max(0, containerHeight - previewHeight - initialTop),
+      });
+    };
+
+    recalcPreviewDragConstraints();
+    window.addEventListener("resize", recalcPreviewDragConstraints);
+    return () => {
+      window.removeEventListener("resize", recalcPreviewDragConstraints);
+    };
+  }, [sidebarOpen, computerOpen]);
+
+  useEffect(() => {
+    return () => {
+      if (previewDragResetTimerRef.current) {
+        clearTimeout(previewDragResetTimerRef.current);
+      }
+    };
+  }, []);
 
   const handleNewChat = useCallback(() => {
     void createConversation();
@@ -225,6 +270,26 @@ export default function Home() {
 
   const hasMessages = messages.length > 0;
   const manualTakeoverActive = sandbox.manualTakeoverEnabled;
+  const handleOpenComputerPanel = useCallback(() => {
+    if (previewDragBlockedRef.current) return;
+    setComputerOpen(true);
+  }, []);
+
+  const handlePreviewDragStart = useCallback(() => {
+    previewDragBlockedRef.current = true;
+    if (previewDragResetTimerRef.current) {
+      clearTimeout(previewDragResetTimerRef.current);
+    }
+  }, []);
+
+  const handlePreviewDragEnd = useCallback(() => {
+    if (previewDragResetTimerRef.current) {
+      clearTimeout(previewDragResetTimerRef.current);
+    }
+    previewDragResetTimerRef.current = setTimeout(() => {
+      previewDragBlockedRef.current = false;
+    }, 120);
+  }, []);
 
   return (
     <div
@@ -239,7 +304,7 @@ export default function Home() {
       <div className="absolute inset-0 bg-background/85 backdrop-blur-sm" />
 
       {/* 内容层 */}
-      <div className="relative flex w-full h-full">
+      <div ref={layoutRef} className="relative flex w-full h-full">
         {/* 侧边栏 */}
         <AnimatePresence>
           {sidebarOpen && (
@@ -301,7 +366,18 @@ export default function Home() {
           </header>
 
           {!computerOpen && (
-            <div className="absolute right-4 top-16 z-20 h-[200px] w-[300px] sm:h-[220px] sm:w-[330px] overflow-hidden rounded-xl border border-border/30 bg-background/40 shadow-[0_12px_30px_rgba(0,0,0,0.35)]">
+            <motion.div
+              drag
+              dragConstraints={previewDragConstraints}
+              dragMomentum={false}
+              dragElastic={0.06}
+              onDragStart={handlePreviewDragStart}
+              onDragEnd={handlePreviewDragEnd}
+              onClick={handleOpenComputerPanel}
+              className="absolute right-4 top-16 z-20 h-[200px] w-[300px] sm:h-[220px] sm:w-[330px] overflow-hidden rounded-xl border border-border/30 bg-background/40 shadow-[0_12px_30px_rgba(0,0,0,0.35)] cursor-grab active:cursor-grabbing select-none touch-none"
+              title="拖拽移动预览，点击打开计算机面板"
+              aria-label="拖拽移动或打开计算机面板"
+            >
               <div
                 className="pointer-events-none absolute left-0 top-0"
                 style={{
@@ -343,19 +419,16 @@ export default function Home() {
                 variant="ghost"
                 size="icon"
                 className="absolute right-2 top-2 h-6 w-6 bg-black/35 text-white/80 hover:bg-black/55 hover:text-white"
-                onClick={() => setComputerOpen(true)}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setComputerOpen(true);
+                }}
                 title="展开计算机面板"
               >
                 <Maximize2 className="w-3.5 h-3.5" />
               </Button>
-              <button
-                type="button"
-                className="absolute inset-0"
-                onClick={() => setComputerOpen(true)}
-                title="打开计算机面板"
-                aria-label="打开计算机面板"
-              />
-            </div>
+            </motion.div>
           )}
 
           {/* 消息区域 */}
