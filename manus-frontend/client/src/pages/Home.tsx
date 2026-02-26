@@ -330,6 +330,7 @@ export default function Home() {
                   onToggleManualTakeover={sandbox.setManualTakeover}
                   onBrowserClick={sandbox.browserClick}
                   onBrowserType={sandbox.browserType}
+                  onBrowserNavigate={sandbox.browserNavigate}
                   onBrowserScroll={sandbox.browserScroll}
                   onBrowserKey={sandbox.browserKey}
                   browserInteractionError={sandbox.browserInteractionError}
@@ -647,6 +648,7 @@ export default function Home() {
                 onToggleManualTakeover={sandbox.setManualTakeover}
                 onBrowserClick={sandbox.browserClick}
                 onBrowserType={sandbox.browserType}
+                onBrowserNavigate={sandbox.browserNavigate}
                 onBrowserScroll={sandbox.browserScroll}
                 onBrowserKey={sandbox.browserKey}
                 browserInteractionError={sandbox.browserInteractionError}

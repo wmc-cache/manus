@@ -17,6 +17,7 @@ interface BrowserWindowProps {
   manualTakeoverEnabled?: boolean;
   onPageClick?: (x: number, y: number, viewportWidth: number, viewportHeight: number) => void;
   onTypeText?: (text: string, submit?: boolean) => void;
+  onNavigate?: (url: string) => void;
   onScrollPage?: (deltaY: number) => void;
   onPressKey?: (key: "Enter" | "Tab" | "Escape") => void;
   interactionError?: string | null;
@@ -27,6 +28,7 @@ export default function BrowserWindow({
   manualTakeoverEnabled = false,
   onPageClick,
   onTypeText,
+  onNavigate,
   onScrollPage,
   onPressKey,
   interactionError,
@@ -34,12 +36,39 @@ export default function BrowserWindow({
   const screenshotRef = useRef<HTMLImageElement | null>(null);
   const [typingText, setTypingText] = useState("");
 
-  const submitTyping = (submit = false) => {
-    const text = typingText;
-    if (!onTypeText || (!text.trim() && !submit)) return;
-    onTypeText(text, submit);
+  const normalizeManualUrl = (raw: string): string | null => {
+    const value = raw.trim();
+    if (!value || /\s/.test(value)) return null;
+
+    const hasScheme = /^[a-zA-Z][a-zA-Z\d+\-.]*:\/\//.test(value);
+    const looksLikeHost =
+      /^localhost(?::\d+)?(?:\/.*)?$/i.test(value) ||
+      /^\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?(?:\/.*)?$/.test(value) ||
+      /^(?:[\w-]+\.)+[\w-]{2,}(?::\d+)?(?:\/.*)?$/i.test(value);
+    if (!hasScheme && !looksLikeHost) return null;
+
+    return hasScheme ? value : `https://${value}`;
+  };
+
+  const handlePrimaryAction = () => {
+    const text = typingText.trim();
+    if (!text) return;
+
+    const normalizedUrl = onNavigate ? normalizeManualUrl(text) : null;
+    if (normalizedUrl) {
+      onNavigate?.(normalizedUrl);
+      setTypingText("");
+      return;
+    }
+    if (!onTypeText) return;
+    onTypeText(text, false);
     setTypingText("");
   };
+
+  const hasInput = Boolean(typingText.trim());
+  const isUrlInput = Boolean(onNavigate && normalizeManualUrl(typingText));
+  const primaryButtonLabel = isUrlInput ? "访问" : "输入";
+  const primaryButtonTitle = isUrlInput ? "访问该地址" : "输入到当前焦点元素";
 
   if (!data) {
     return (
@@ -121,20 +150,25 @@ export default function BrowserWindow({
           onKeyDown={(e) => {
             if (e.key === "Enter") {
               e.preventDefault();
-              submitTyping(false);
+              handlePrimaryAction();
             }
           }}
           disabled={!manualTakeoverEnabled}
-          placeholder={manualTakeoverEnabled ? "向页面输入文本..." : "开启接管后可输入"}
+          placeholder={
+            manualTakeoverEnabled
+              ? "输入 URL 访问，或先点页面元素后输入文本"
+              : "开启接管后可输入"
+          }
           className="flex-1 h-7 rounded px-2 text-xs bg-[oklch(0.16_0.014_260)] border border-border/20 outline-none disabled:opacity-60"
         />
 
         <button
-          onClick={() => submitTyping(false)}
-          disabled={!manualTakeoverEnabled || !typingText.trim()}
+          onClick={handlePrimaryAction}
+          disabled={!manualTakeoverEnabled || !hasInput}
+          title={primaryButtonTitle}
           className="h-7 px-2 text-[10px] rounded bg-primary/20 text-primary disabled:opacity-40"
         >
-          输入
+          {primaryButtonLabel}
         </button>
         <button
           onClick={() => onPressKey?.("Enter")}
@@ -144,6 +178,12 @@ export default function BrowserWindow({
           Enter
         </button>
       </div>
+
+      {manualTakeoverEnabled && (
+        <div className="px-3 py-1 text-[10px] text-muted-foreground/80 bg-[oklch(0.11_0.012_260)] border-b border-border/10">
+          先点击页面输入框再“输入”文本；输入 URL（如 example.com）会直接访问。
+        </div>
+      )}
 
       {/* 页面截图 */}
       <div

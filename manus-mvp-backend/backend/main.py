@@ -569,6 +569,58 @@ async def websocket_sandbox(websocket: WebSocket):
                             conversation_id=conv_id,
                         ))
 
+                    elif msg_type == "browser_navigate_manual":
+                        conv_id = resolve_conversation_id(data)
+                        takeover_enabled, takeover_target = get_takeover_state(conv_id)
+                        if not (takeover_enabled and takeover_target in {"all", "browser"}):
+                            await websocket.send_json({
+                                "type": "browser_interaction_result",
+                                "data": {
+                                    "ok": False,
+                                    "action": "navigate",
+                                    "error": "当前未开启浏览器手动接管",
+                                },
+                                "window_id": "browser",
+                                "conversation_id": conv_id,
+                                "timestamp": datetime.now().isoformat(),
+                            })
+                            continue
+
+                        raw_url = str(data.get("url", "") or "").strip()
+                        if not raw_url:
+                            await websocket.send_json({
+                                "type": "browser_interaction_result",
+                                "data": {
+                                    "ok": False,
+                                    "action": "navigate",
+                                    "error": "URL 不能为空",
+                                },
+                                "window_id": "browser",
+                                "conversation_id": conv_id,
+                                "timestamp": datetime.now().isoformat(),
+                            })
+                            continue
+
+                        if not re.match(r"^[a-zA-Z][a-zA-Z\d+\-.]*://", raw_url):
+                            raw_url = f"https://{raw_url}"
+
+                        result = await browser_service.navigate(
+                            raw_url,
+                            conversation_id=conv_id,
+                        )
+                        navigate_ok = bool(result.get("success", "error" not in result))
+                        await websocket.send_json({
+                            "type": "browser_interaction_result",
+                            "data": {
+                                "ok": navigate_ok,
+                                "action": "navigate",
+                                "error": result.get("error"),
+                            },
+                            "window_id": "browser",
+                            "conversation_id": conv_id,
+                            "timestamp": datetime.now().isoformat(),
+                        })
+
                     elif msg_type == "browser_click":
                         conv_id = resolve_conversation_id(data)
                         takeover_enabled, takeover_target = get_takeover_state(conv_id)

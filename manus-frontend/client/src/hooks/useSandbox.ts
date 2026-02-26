@@ -373,6 +373,17 @@ export function useSandbox() {
     }));
   }, []);
 
+  const browserNavigate = useCallback((url: string) => {
+    const convId = currentConvIdRef.current;
+    if (!convId || wsRef.current?.readyState !== WebSocket.OPEN) return;
+
+    wsRef.current.send(JSON.stringify({
+      type: "browser_navigate_manual",
+      url,
+      conversation_id: convId,
+    }));
+  }, []);
+
   const browserScroll = useCallback((deltaY: number) => {
     const convId = currentConvIdRef.current;
     if (!convId || wsRef.current?.readyState !== WebSocket.OPEN) return;
@@ -496,6 +507,7 @@ export function useSandbox() {
     sendTerminalInput,
     browserClick,
     browserType,
+    browserNavigate,
     browserScroll,
     browserKey,
     fetchFileTree,

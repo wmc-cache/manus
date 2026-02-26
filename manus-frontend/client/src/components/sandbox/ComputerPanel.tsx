@@ -99,6 +99,7 @@ interface ComputerPanelProps {
   onToggleManualTakeover?: (enabled: boolean, target?: ManualTakeoverTarget) => void;
   onBrowserClick?: (x: number, y: number, viewportWidth: number, viewportHeight: number) => void;
   onBrowserType?: (text: string, submit?: boolean) => void;
+  onBrowserNavigate?: (url: string) => void;
   onBrowserScroll?: (deltaY: number) => void;
   onBrowserKey?: (key: "Enter" | "Tab" | "Escape") => void;
   browserInteractionError?: string | null;
@@ -133,6 +134,7 @@ export default function ComputerPanel({
   onToggleManualTakeover,
   onBrowserClick,
   onBrowserType,
+  onBrowserNavigate,
   onBrowserScroll,
   onBrowserKey,
   browserInteractionError,
@@ -344,6 +346,7 @@ export default function ComputerPanel({
                 manualTakeoverEnabled={manualTakeoverEnabled}
                 onPageClick={onBrowserClick}
                 onTypeText={onBrowserType}
+                onNavigate={onBrowserNavigate}
                 onScrollPage={onBrowserScroll}
                 onPressKey={onBrowserKey}
                 interactionError={browserInteractionError}
