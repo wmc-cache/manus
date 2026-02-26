@@ -225,7 +225,6 @@ export default function Home() {
 
   const hasMessages = messages.length > 0;
   const manualTakeoverActive = sandbox.manualTakeoverEnabled;
-  const previewWindow = "browser";
 
   return (
     <div
@@ -304,18 +303,18 @@ export default function Home() {
           {!computerOpen && (
             <div className="absolute right-4 top-16 z-20 h-[200px] w-[300px] sm:h-[220px] sm:w-[330px] overflow-hidden rounded-xl border border-border/30 bg-background/40 shadow-[0_12px_30px_rgba(0,0,0,0.35)]">
               <div
-                className="pointer-events-none h-full"
+                className="pointer-events-none absolute left-0 top-0"
                 style={{
                   transform: `scale(${PREVIEW_SCALE})`,
                   transformOrigin: "top left",
-                  width: `${100 / PREVIEW_SCALE}%`,
-                  height: `${100 / PREVIEW_SCALE}%`,
+                  width: `calc(100% / ${PREVIEW_SCALE})`,
+                  height: `calc(100% / ${PREVIEW_SCALE})`,
                 }}
               >
                 <ComputerPanel
                   connected={sandbox.connected}
-                  activeWindow={previewWindow}
-                  onWindowChange={() => {}}
+                  activeWindow={sandbox.activeWindow}
+                  onWindowChange={sandbox.setActiveWindow}
                   terminalOutput={sandbox.terminalOutput}
                   onTerminalInput={sandbox.sendTerminalInput}
                   browserData={sandbox.browserData}
