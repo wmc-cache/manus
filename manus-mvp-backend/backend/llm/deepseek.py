@@ -118,7 +118,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "web_search",
-            "description": "搜索互联网获取信息。用于查找最新资讯、事实验证、获取参考资料等。",
+            "description": "搜索互联网获取信息。用于查找最新资讯、新闻动态、事实验证、获取参考资料等。涉及时效信息时应优先使用本工具。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -229,7 +229,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "browser_navigate",
-            "description": "在浏览器中打开指定 URL。用户可以在浏览器窗口看到页面截图。",
+            "description": "在浏览器中打开指定 URL。仅在需要网页交互（登录、点击、输入、滚动等）时使用；纯信息检索优先 web_search。",
             "parameters": {
                 "type": "object",
                 "properties": {

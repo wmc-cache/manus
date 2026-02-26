@@ -667,6 +667,35 @@ class ToolStateMachine:
                 return name
         return ""
 
+    @staticmethod
+    def _latest_user_content(conversation: Conversation) -> str:
+        for msg in reversed(conversation.messages):
+            if msg.role != MessageRole.USER:
+                continue
+            text = (msg.content or "").strip()
+            if text:
+                return text
+        return ""
+
+    @classmethod
+    def _is_latest_news_query(cls, conversation: Conversation) -> bool:
+        text = cls._latest_user_content(conversation).lower()
+        if not text:
+            return False
+
+        # 时效性资讯查询：优先 web_search，避免默认进入浏览器滚动抓取。
+        keyword_hits = [
+            "最新", "最近", "今日", "今天", "动态", "新闻", "快讯", "头条",
+            "latest", "recent", "today", "news", "headline", "update", "updates",
+        ]
+        domain_hits = [
+            "行业", "人工智能", "科技", "金融", "市场", "政策", "发布",
+            "tech", "finance", "market", "policy", "release",
+        ]
+        has_news_intent = any(token in text for token in keyword_hits)
+        has_domain_target = any(token in text for token in domain_hits)
+        return has_news_intent or has_domain_target
+
     def _get_capability_tools(self, conversation: Conversation) -> Optional[set]:
         """
         Get allowed tools based on current phase capabilities.
@@ -703,6 +732,16 @@ class ToolStateMachine:
         if not self.enabled or not allowed:
             return allowed
 
+        if self._is_latest_news_query(conversation):
+            search_first = {
+                "web_search", "wide_research", "spawn_sub_agents",
+                "read_file", "write_file", "edit_file", "append_file",
+                "find_files", "grep_files", "list_files",
+            }
+            narrowed = [tool for tool in allowed if tool in search_first]
+            if "web_search" in narrowed:
+                allowed = narrowed
+
         # Try capability-based gating first
         cap_tools = self._get_capability_tools(conversation)
         if cap_tools:
@@ -724,13 +763,13 @@ class ToolStateMachine:
             if narrowed:
                 allowed = narrowed
         elif phase_id == 1 and last_tool.startswith("browser_"):
-            browser_bias = {
-                "web_search", "browser_navigate", "browser_get_content",
-                "browser_screenshot", "browser_click", "browser_input",
-                "browser_scroll", "read_file",
+            recovery_bias = {
+                "web_search", "wide_research", "spawn_sub_agents",
+                "read_file", "write_file", "edit_file",
+                "find_files", "grep_files", "list_files",
             }
-            narrowed = [tool for tool in allowed if tool in browser_bias]
-            if narrowed:
+            narrowed = [tool for tool in allowed if tool in recovery_bias]
+            if "web_search" in narrowed:
                 allowed = narrowed
 
         return allowed

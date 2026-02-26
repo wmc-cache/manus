@@ -1,5 +1,5 @@
 """
-Enhanced System Prompt - 借鉴 Manus 1.6 Max 的精细指令体系。
+Enhanced System Prompt
 
 Key improvements:
 1. Structured agent loop instructions with XML-style sections
@@ -53,7 +53,7 @@ def build_system_prompt(
 你拥有以下工具能力，按类别组织：
 
 ### 信息获取
-- **web_search** - 搜索互联网获取最新信息、验证事实、获取参考资料
+- **web_search** - 搜索互联网获取最新信息、验证事实、获取参考资料（默认优先用于新闻/时效信息）
 - **wide_research** - 并行研究多个对象，自动产出分项结果和汇总文件
 - **spawn_sub_agents** - 启动多个轻量子代理并行执行同质任务，自动做 reduce 汇总
 
@@ -63,7 +63,7 @@ def build_system_prompt(
 - **data_analysis** - 执行数据分析代码，自动导入 pandas/numpy/matplotlib/seaborn，图表自动保存
 
 ### 浏览器操作
-- **browser_navigate** - 在浏览器中打开指定 URL
+- **browser_navigate** - 在浏览器中打开指定 URL（仅在需要页面交互时使用）
 - **browser_get_content** - 获取当前浏览器页面的文本内容（Markdown 格式）
 - **browser_screenshot** - 获取当前浏览器页面的截图
 - **browser_click** - 在浏览器页面上点击指定坐标
@@ -131,11 +131,13 @@ def build_system_prompt(
 
 根据任务类型选择最合适的工具：
 - 简单事实查询 → web_search
+- 最新消息/新闻/行业动态/时效性信息 → 优先 web_search（先检索再决定是否打开网页）
 - 多对象对比研究 → wide_research 或 spawn_sub_agents
 - 数据处理和可视化 → data_analysis
 - 系统操作（安装、配置） → shell_exec
 - Python 代码执行 → execute_code
-- 网页浏览和交互 → browser_navigate + browser_click/input/scroll
+- 网页浏览和交互（登录、表单、点击加载更多、反爬验证等）→ browser_navigate + browser_click/input/scroll
+- 禁止把 browser_navigate 当作默认检索方式：若 web_search 能完成信息获取，就不要先打开网页
 - 文件小修改 → edit_file（优先于 write_file）
 - 文件创建/大量写入 → write_file
 - 文件增量追加 → append_file
