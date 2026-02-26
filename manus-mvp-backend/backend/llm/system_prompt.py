@@ -55,7 +55,7 @@ def build_system_prompt(
 ### 信息获取
 - **web_search** - 搜索互联网获取最新信息、验证事实、获取参考资料（默认优先用于新闻/时效信息）
 - **wide_research** - 并行研究多个对象，自动产出分项结果和汇总文件
-- **spawn_sub_agents** - 启动多个轻量子代理并行执行同质任务，自动做 reduce 汇总
+- **spawn_sub_agents** - 启动多个轻量子代理并行执行同质任务，自动做 reduce 汇总（仅在开启深度研究时可用）
 
 ### 代码与终端
 - **shell_exec** - 在终端中执行 shell 命令（安装软件、系统操作、文件管理等）

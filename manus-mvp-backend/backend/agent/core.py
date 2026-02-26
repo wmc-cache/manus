@@ -519,8 +519,11 @@ class AgentEngine:
             return tool_name.startswith("browser_")
         return True
 
-    def _get_allowed_tools(self, conversation: Conversation) -> List[str]:
+    def _get_allowed_tools(self, conversation: Conversation, *, deep_research_enabled: bool = False) -> List[str]:
         allowed = list(DEFAULT_TOOL_NAMES)
+        # 子代理并行仅在深度研究模式下开放。
+        if not deep_research_enabled:
+            allowed = [t for t in allowed if t != "spawn_sub_agents"]
         if conversation.manual_takeover_enabled:
             target = (conversation.manual_takeover_target or "all").strip().lower()
             if target == "all":
@@ -762,7 +765,10 @@ class AgentEngine:
                     "role": "user",
                     "content": deep_research_instruction,
                 }]
-            allowed_tools = self._get_allowed_tools(conversation)
+            allowed_tools = self._get_allowed_tools(
+                conversation,
+                deep_research_enabled=deep_research_enabled,
+            )
             # 深度研究分阶段收敛工具，避免在汇总阶段继续发散调用。
             if deep_research_enabled:
                 if reduce_summary_read_completed:

@@ -157,7 +157,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "spawn_sub_agents",
-            "description": "启动多个轻量子代理并行执行同质任务。每个子代理在 multi_agent/agents/<agent_id>/ 产出 task/observation/result，并在 multi_agent/reduce_summary.md 做汇总。支持自动重试失败的子代理。",
+            "description": "启动多个轻量子代理并行执行同质任务（仅深度研究模式开启时可用）。每个子代理在 multi_agent/agents/<agent_id>/ 产出 task/observation/result，并在 multi_agent/reduce_summary.md 做汇总。支持自动重试失败的子代理。",
             "parameters": {
                 "type": "object",
                 "properties": {
