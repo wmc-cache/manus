@@ -20,6 +20,8 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
   const isUser = message.role === "user";
   const hasToolCalls = message.toolCalls && message.toolCalls.length > 0;
   const hasContent = !!message.content;
+  const images = message.images || [];
+  const hasImages = images.length > 0;
 
   return (
     <motion.div
@@ -45,6 +47,30 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
 
       {/* 消息内容 */}
       <div className={`max-w-[80%] min-w-0 ${isUser ? "items-end" : "items-start"}`}>
+        {isUser && hasImages && (
+          <div className="mb-1.5 flex flex-wrap gap-2">
+            {images.map((image, idx) => {
+              const key = `${image.path || image.name || "image"}-${idx}`;
+              const label = image.path || image.name || "image";
+              if (image.data_url) {
+                return (
+                  <div key={key} className="w-28 h-28 rounded-lg overflow-hidden border border-border/40 bg-background/40">
+                    <img src={image.data_url} alt={image.name || "uploaded image"} className="w-full h-full object-cover" />
+                  </div>
+                );
+              }
+              return (
+                <div
+                  key={key}
+                  className="max-w-[220px] rounded-lg border border-border/40 bg-background/30 px-2 py-1.5 text-xs text-muted-foreground break-all"
+                >
+                  {label}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
         {/* 文本内容 */}
         {hasContent && (
           <div

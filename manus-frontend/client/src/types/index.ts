@@ -8,10 +8,19 @@ export interface ToolCall {
   status: "pending" | "running" | "completed" | "failed";
 }
 
+export interface ChatImagePayload {
+  name: string;
+  mime_type: string;
+  data_url?: string;
+  size_bytes?: number;
+  path?: string;
+}
+
 export interface Message {
   id: string;
   role: "user" | "assistant" | "tool";
   content: string;
+  images?: ChatImagePayload[];
   toolCalls?: ToolCall[];
   thinking?: string;
   timestamp: string;

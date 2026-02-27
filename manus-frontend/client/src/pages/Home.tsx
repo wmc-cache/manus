@@ -20,7 +20,7 @@ import MessageBubble from "@/components/MessageBubble";
 import ThinkingIndicator from "@/components/ThinkingIndicator";
 import ChatInput from "@/components/ChatInput";
 import ComputerPanel from "@/components/sandbox/ComputerPanel";
-import type { DeepResearchSettingsData, SubAgentSessionDetailData } from "@/types";
+import type { ChatImagePayload, DeepResearchSettingsData, SubAgentSessionDetailData } from "@/types";
 import { toast } from "sonner";
 
 const PLAN_STATUS_LABEL: Record<string, string> = {
@@ -191,9 +191,10 @@ export default function Home() {
     void createConversation();
   }, [createConversation]);
 
-  const handleSendMessage = useCallback((text: string, options?: { deepResearch?: boolean }) => {
+  const handleSendMessage = useCallback((text: string, options?: { deepResearch?: boolean; images?: ChatImagePayload[] }) => {
     if (options?.deepResearch) {
       sendMessage(text, {
+        images: options.images,
         deepResearch: {
           enabled: true,
           maxConcurrency: deepResearchSettings.maxConcurrency,
@@ -203,7 +204,7 @@ export default function Home() {
       });
       return;
     }
-    sendMessage(text);
+    sendMessage(text, { images: options?.images });
   }, [deepResearchSettings, sendMessage]);
 
   const handleSuggestionClick = useCallback(

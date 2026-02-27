@@ -27,6 +27,14 @@ class PlanPhaseStatus(str, Enum):
     FAILED = "failed"
 
 
+class ChatImage(BaseModel):
+    name: str = ""
+    mime_type: str = "application/octet-stream"
+    data_url: Optional[str] = None
+    size_bytes: Optional[int] = None
+    path: Optional[str] = None
+
+
 class ChatRequest(BaseModel):
     message: str
     conversation_id: Optional[str] = None
@@ -35,6 +43,7 @@ class ChatRequest(BaseModel):
     deep_research_max_concurrency: Optional[int] = None
     deep_research_max_items: Optional[int] = None
     deep_research_max_iterations: Optional[int] = None
+    images: List[ChatImage] = Field(default_factory=list)
 
 
 class ToolCall(BaseModel):
@@ -63,6 +72,7 @@ class Message(BaseModel):
     role: MessageRole
     content: str = ""
     tool_calls: List[ToolCall] = Field(default_factory=list)
+    images: List[ChatImage] = Field(default_factory=list)
     thinking: Optional[str] = None
     timestamp: datetime = Field(default_factory=datetime.now)
 

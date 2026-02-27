@@ -666,6 +666,7 @@ class AgentEngine:
         user_message: str,
         conversation_id: Optional[str] = None,
         record_user_message: bool = True,
+        uploaded_images: Optional[List[Dict[str, Any]]] = None,
         deep_research_enabled: bool = False,
         deep_research_max_concurrency: Optional[int] = None,
         deep_research_max_items: Optional[int] = None,
@@ -680,27 +681,51 @@ class AgentEngine:
         3. LLM 返回工具调用 -> 执行工具 -> 将结果反馈给 LLM -> 回到步骤 2
         4. 直到 LLM 返回纯文本（无工具调用）或达到最大迭代次数
         """
+        normalized_images: List[Dict[str, Any]] = []
+        if uploaded_images:
+            for image in uploaded_images:
+                if not isinstance(image, dict):
+                    continue
+                path = str(image.get("path", "")).strip()
+                name = str(image.get("name", "")).strip()
+                mime_type = str(image.get("mime_type", "")).strip() or "application/octet-stream"
+                size_bytes = image.get("size_bytes")
+                normalized_images.append({
+                    "path": path,
+                    "name": name,
+                    "mime_type": mime_type,
+                    "size_bytes": int(size_bytes) if isinstance(size_bytes, int) else None,
+                })
+
+        effective_user_message = (user_message or "").strip()
+        if not effective_user_message and normalized_images:
+            effective_user_message = "请分析我上传的图片。"
+
         # 获取或创建对话
         logger.info(
             "[AgentLoop] Starting: deep_research_enabled=%s, message=%s",
-            deep_research_enabled, user_message[:80]
+            deep_research_enabled, effective_user_message[:80]
         )
         conversation = self.get_or_create_conversation(conversation_id)
 
         # 添加用户消息（控制指令可选择不写入会话历史）
         if record_user_message:
-            user_msg = Message(role=MessageRole.USER, content=user_message)
+            user_msg = Message(
+                role=MessageRole.USER,
+                content=effective_user_message,
+                images=normalized_images,
+            )
             conversation.messages.append(user_msg)
         # 进入新一轮执行时，先清除“可继续”标记
         conversation.limit_reached = False
         conversation.continue_message = None
 
         # 更新计划（初始化或恢复）
-        plan_reason = await self._ensure_plan_for_turn(conversation, user_message)
+        plan_reason = await self._ensure_plan_for_turn(conversation, effective_user_message)
 
         # 若当前仍为默认标题，则使用首条用户消息回填（兼容历史脏数据）
         if record_user_message:
-            self._maybe_refresh_conversation_title(conversation, preferred_source=user_message)
+            self._maybe_refresh_conversation_title(conversation, preferred_source=effective_user_message)
         self._save_conversations()
 
         # 发送对话 ID
@@ -752,7 +777,7 @@ class AgentEngine:
             spawn_completed = self._has_completed_tool_call(conversation, "spawn_sub_agents")
             reduce_summary_read_completed = self._has_completed_reduce_summary_read(conversation)
             deep_research_instruction = self._build_deep_research_instruction(
-                user_message=user_message,
+                user_message=effective_user_message,
                 enabled=deep_research_enabled,
                 max_concurrency=deep_research_max_concurrency,
                 max_items=deep_research_max_items,

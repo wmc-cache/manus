@@ -355,14 +355,15 @@ class ContextManager:
     ) -> Optional[Dict[str, Any]]:
         """Format a single message for LLM input."""
         if msg.role == MessageRole.USER:
+            text_content = self._build_text_content(
+                conversation=conversation,
+                message=msg,
+                limit=limit,
+                allow_externalize=allow_externalize,
+            )
             return {
                 "role": "user",
-                "content": self._build_text_content(
-                    conversation=conversation,
-                    message=msg,
-                    limit=limit,
-                    allow_externalize=allow_externalize,
-                ),
+                "content": self._append_uploaded_images_hint(text_content, msg),
             }
 
         if msg.role == MessageRole.ASSISTANT:
@@ -399,6 +400,39 @@ class ContextManager:
             }
 
         return None
+
+    @staticmethod
+    def _append_uploaded_images_hint(content: str, message: Message) -> str:
+        images = getattr(message, "images", None) or []
+        if not images:
+            return content
+
+        lines = []
+        for idx, image in enumerate(images[:6], start=1):
+            path = str(getattr(image, "path", "") or "").strip()
+            name = str(getattr(image, "name", "") or "").strip()
+            mime_type = str(getattr(image, "mime_type", "") or "").strip()
+            size_bytes = getattr(image, "size_bytes", None)
+
+            target = path or name or f"image_{idx}"
+            parts = []
+            if mime_type:
+                parts.append(mime_type)
+            if isinstance(size_bytes, int) and size_bytes > 0:
+                parts.append(f"{size_bytes} bytes")
+
+            suffix = f" ({', '.join(parts)})" if parts else ""
+            lines.append(f"- {target}{suffix}")
+
+        hint = "\n".join([
+            f"用户上传了 {len(images)} 张图片（已保存到工作区）：",
+            *lines,
+            "如需分析图片内容，可用 execute_code 读取这些文件。",
+        ])
+
+        if content.strip():
+            return f"{content.rstrip()}\n\n{hint}"
+        return hint
 
     def _format_all_messages(
         self,

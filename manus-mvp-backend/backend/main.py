@@ -6,6 +6,9 @@ import asyncio
 import re
 import logging
 import io
+import base64
+import binascii
+import mimetypes
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -149,6 +152,95 @@ def _load_sub_agent_index(conversation_id: str):
 
 
 _SUB_AGENT_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
+_DATA_URL_RE = re.compile(r"^data:(?P<mime>[A-Za-z0-9.+-]+/[A-Za-z0-9.+-]+);base64,(?P<data>.+)$")
+MAX_UPLOAD_IMAGE_BYTES = int(os.environ.get("MANUS_MAX_UPLOAD_IMAGE_BYTES", 6 * 1024 * 1024))
+MAX_UPLOAD_IMAGE_COUNT = int(os.environ.get("MANUS_MAX_UPLOAD_IMAGE_COUNT", "4"))
+
+
+def _sanitize_upload_filename(raw_name: str) -> str:
+    name = Path(raw_name or "image").name
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("._")
+    return safe[:80] or "image"
+
+
+def _pick_upload_extension(filename: str, mime_type: str) -> str:
+    ext = Path(filename).suffix.lower()
+    if ext in {
+        ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".svg",
+        ".heic", ".heif", ".tiff", ".tif",
+    }:
+        return ext
+    guessed = (mimetypes.guess_extension(mime_type or "") or "").lower()
+    if guessed == ".jpe":
+        return ".jpg"
+    return guessed or ".bin"
+
+
+def _decode_image_data_url(data_url: str):
+    if not isinstance(data_url, str):
+        return None
+    text = data_url.strip()
+    if not text:
+        return None
+    matched = _DATA_URL_RE.match(text)
+    if not matched:
+        return None
+    mime_type = matched.group("mime").lower()
+    if not mime_type.startswith("image/"):
+        return None
+
+    payload = matched.group("data")
+    try:
+        raw = base64.b64decode(payload, validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    if not raw or len(raw) > MAX_UPLOAD_IMAGE_BYTES:
+        return None
+    return mime_type, raw
+
+
+def _persist_uploaded_images(conversation_id: str, images):
+    if not images:
+        return []
+    try:
+        workspace_root = Path(get_workspace_root(conversation_id)).resolve()
+        upload_dir = (workspace_root / "uploads").resolve()
+        upload_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return []
+
+    saved = []
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    for index, image in enumerate(images[:MAX_UPLOAD_IMAGE_COUNT], start=1):
+        decoded = _decode_image_data_url(getattr(image, "data_url", ""))
+        if not decoded:
+            continue
+        mime_type, raw = decoded
+
+        filename_hint = _sanitize_upload_filename(getattr(image, "name", "") or "image")
+        mime_hint = (getattr(image, "mime_type", "") or "").strip().lower()
+        if mime_hint.startswith("image/"):
+            mime_type = mime_hint
+        stem = Path(filename_hint).stem or "image"
+        ext = _pick_upload_extension(filename_hint, mime_type)
+        filename = f"{timestamp}_{index:02d}_{stem}{ext}"
+        target_path = (upload_dir / filename).resolve()
+
+        if upload_dir != target_path and upload_dir not in target_path.parents:
+            continue
+        try:
+            target_path.write_bytes(raw)
+        except Exception:
+            continue
+
+        saved.append({
+            "name": filename_hint,
+            "mime_type": mime_type,
+            "size_bytes": len(raw),
+            "path": f"uploads/{filename}",
+        })
+
+    return saved
 
 
 def _load_sub_agent_session(conversation_id: str, session_id: str):
@@ -202,16 +294,19 @@ async def chat(request: ChatRequest):
     import logging as _logging
     _chat_logger = _logging.getLogger("main.chat")
     _chat_logger.info(
-        "[ChatAPI] Received: message=%s, deep_research_enabled=%s, conversation_id=%s",
-        request.message[:60], request.deep_research_enabled, request.conversation_id
+        "[ChatAPI] Received: message=%s, deep_research_enabled=%s, conversation_id=%s, images=%d",
+        request.message[:60], request.deep_research_enabled, request.conversation_id, len(request.images or [])
     )
-    if not request.message.strip():
+    if not request.message.strip() and not request.images:
         raise HTTPException(status_code=400, detail="消息不能为空")
 
     # 先解析会话并加锁，避免同一 conversation 并发请求造成消息/计划状态错乱
     conversation = agent_engine.get_or_create_conversation(request.conversation_id)
     conversation_lock = agent_engine.get_conversation_lock(conversation.id)
     is_control_continue = bool(request.control_continue)
+    uploaded_images = _persist_uploaded_images(conversation.id, request.images)
+    if not request.message.strip() and not uploaded_images:
+        raise HTTPException(status_code=400, detail="消息不能为空，或上传图片无效")
 
     # 对话创建后立即异步预热 Docker 沙箱容器，使监控仪表盘可见
     _schedule_docker_preheat(conversation.id)
@@ -275,6 +370,7 @@ async def chat(request: ChatRequest):
                     user_message=request.message,
                     conversation_id=conversation.id,
                     record_user_message=not is_control_continue,
+                    uploaded_images=uploaded_images,
                     deep_research_enabled=bool(request.deep_research_enabled),
                     deep_research_max_concurrency=request.deep_research_max_concurrency,
                     deep_research_max_items=request.deep_research_max_items,
@@ -367,6 +463,15 @@ async def get_conversation(conversation_id: str):
             "id": msg.id,
             "role": msg.role.value,
             "content": msg.content,
+            "images": [
+                {
+                    "name": image.name,
+                    "mime_type": image.mime_type,
+                    "size_bytes": image.size_bytes,
+                    "path": image.path,
+                }
+                for image in msg.images
+            ],
             "timestamp": msg.timestamp.isoformat(),
             "tool_calls": [
                 {

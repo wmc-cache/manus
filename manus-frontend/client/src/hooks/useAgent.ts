@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import type {
   Message,
+  ChatImagePayload,
   ToolCall,
   Conversation,
   ThinkingEventData,
@@ -119,6 +120,7 @@ interface SendMessageOptions {
   silentUserMessage?: boolean;
   conversationIdOverride?: string | null;
   controlContinue?: boolean;
+  images?: ChatImagePayload[];
   deepResearch?: {
     enabled: boolean;
     maxConcurrency: number;
@@ -145,6 +147,13 @@ interface ConversationDetailResponse {
     id: string;
     role: "user" | "assistant" | "tool";
     content: string;
+    images?: Array<{
+      name?: string;
+      mime_type?: string;
+      size_bytes?: number;
+      path?: string;
+      data_url?: string;
+    }>;
     timestamp: string;
     tool_calls?: Array<{
       id: string;
@@ -174,6 +183,19 @@ interface CreateConversationResponse {
 
 type ConversationDetailMessage = NonNullable<ConversationDetailResponse["messages"]>[number];
 
+function normalizeImages(raw: unknown): ChatImagePayload[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((item): item is Record<string, unknown> => !!item && typeof item === "object")
+    .map((item) => ({
+      name: typeof item.name === "string" ? item.name : "image",
+      mime_type: typeof item.mime_type === "string" ? item.mime_type : "application/octet-stream",
+      size_bytes: typeof item.size_bytes === "number" ? item.size_bytes : undefined,
+      path: typeof item.path === "string" ? item.path : undefined,
+      data_url: typeof item.data_url === "string" ? item.data_url : undefined,
+    }));
+}
+
 function normalizeConversations(payload: ConversationListResponse): Conversation[] {
   const items = payload.conversations || [];
   return items.map((item) => ({
@@ -192,6 +214,7 @@ function normalizeMessage(item: ConversationDetailMessage): Message {
     id: item?.id || crypto.randomUUID(),
     role: item?.role || "assistant",
     content: item?.content || "",
+    images: normalizeImages(item?.images),
     toolCalls: (item?.tool_calls || []).map((tc) => ({
       id: tc.id || crypto.randomUUID(),
       name: tc.name || "",
@@ -601,6 +624,7 @@ export function useAgent() {
         id: crypto.randomUUID(),
         role: "user",
         content: message,
+        images: options?.images || [],
         timestamp: new Date().toISOString(),
       };
 
@@ -649,6 +673,7 @@ export function useAgent() {
         headers: buildAuthHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
           message,
+          images: options?.images || [],
           conversation_id: effectiveConversationId,
           control_continue: controlContinue,
           deep_research_enabled: Boolean(options?.deepResearch?.enabled),
