@@ -47,6 +47,34 @@ SKIP_DIRS = {
     ".next", "dist", "build", ".cache",
 }
 
+MAX_GLOB_PATTERN_EXPANSIONS = 32
+
+
+def _expand_brace_glob(pattern: str) -> List[str]:
+    """
+    Expand single-level brace glob patterns like:
+    - **/*.{jpg,jpeg,png}
+    - file.{py,ts}
+    """
+    if not isinstance(pattern, str):
+        return [str(pattern)]
+
+    left = pattern.find("{")
+    right = pattern.find("}", left + 1)
+    if left < 0 or right < 0 or right <= left + 1:
+        return [pattern]
+
+    inside = pattern[left + 1:right]
+    options = [item.strip() for item in inside.split(",") if item.strip()]
+    if not options:
+        return [pattern]
+
+    # Avoid generating too many expanded patterns.
+    options = options[:MAX_GLOB_PATTERN_EXPANSIONS]
+    prefix = pattern[:left]
+    suffix = pattern[right + 1:]
+    return [f"{prefix}{opt}{suffix}" for opt in options]
+
 # Binary file extensions to skip in grep
 BINARY_EXTENSIONS = {
     ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".svg",
@@ -86,28 +114,38 @@ async def find_files(
 
     try:
         matches = []
+        seen_paths = set()
         search_root = Path(resolved_path)
+        expanded_patterns = _expand_brace_glob(pattern)
+        if len(expanded_patterns) > MAX_GLOB_PATTERN_EXPANSIONS:
+            expanded_patterns = expanded_patterns[:MAX_GLOB_PATTERN_EXPANSIONS]
 
-        for file_path in search_root.rglob(pattern):
-            # Skip directories in skip list
-            parts = file_path.relative_to(search_root).parts
-            if any(part in SKIP_DIRS for part in parts):
-                continue
+        for expanded in expanded_patterns:
+            for file_path in search_root.rglob(expanded):
+                # Skip directories in skip list
+                parts = file_path.relative_to(search_root).parts
+                if any(part in SKIP_DIRS for part in parts):
+                    continue
 
-            rel_path = _to_workspace_relpath(str(file_path), workspace)
-            is_dir = file_path.is_dir()
+                rel_path = _to_workspace_relpath(str(file_path), workspace)
+                if rel_path in seen_paths:
+                    continue
+                seen_paths.add(rel_path)
 
-            if is_dir:
-                matches.append(f"📁 {rel_path}/")
-            else:
-                try:
-                    size = file_path.stat().st_size
-                    mtime = file_path.stat().st_mtime
-                    size_str = _format_size(size)
-                    matches.append(f"📄 {rel_path} ({size_str})")
-                except OSError:
-                    matches.append(f"📄 {rel_path}")
+                is_dir = file_path.is_dir()
 
+                if is_dir:
+                    matches.append(f"📁 {rel_path}/")
+                else:
+                    try:
+                        size = file_path.stat().st_size
+                        size_str = _format_size(size)
+                        matches.append(f"📄 {rel_path} ({size_str})")
+                    except OSError:
+                        matches.append(f"📄 {rel_path}")
+
+                if len(matches) >= max_results:
+                    break
             if len(matches) >= max_results:
                 break
 

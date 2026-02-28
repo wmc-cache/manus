@@ -77,6 +77,11 @@ DEEPSEEK_MODEL = _resolve_multi_key(
     ("CLAUDE_MODEL", "DEEPSEEK_MODEL"),
     default="deepseek-chat",
 )
+DEEPSEEK_FALLBACK_MODELS = [
+    item.strip()
+    for item in os.environ.get("DEEPSEEK_FALLBACK_MODELS", "deepseek-chat").split(",")
+    if item.strip()
+]
 
 
 def _read_int_env(name: str, default: int, minimum: int = 1) -> int:
@@ -764,43 +769,80 @@ def _is_retryable(error: Exception) -> bool:
     return any(keyword in err_text for keyword in _RETRYABLE_ERRORS)
 
 
+def _is_model_not_found(error: Exception) -> bool:
+    err_text = str(error).lower()
+    return (
+        "model_not_found" in err_text
+        or "no available channel for model" in err_text
+        or "model does not exist" in err_text
+    )
+
+
 async def _create_completion_with_retry(kwargs: Dict[str, Any], max_retries: int = MAX_RETRIES):
-    """Create completion with retry and max_tokens fallback."""
+    """Create completion with retry/max_tokens fallback and model fallback."""
     last_error = None
 
-    for attempt in range(max_retries):
-        try:
-            return await client.chat.completions.create(**kwargs)
-        except Exception as e:
-            last_error = e
-            err_text = str(e).lower()
+    requested_model = str(kwargs.get("model") or DEEPSEEK_MODEL).strip() or DEEPSEEK_MODEL
+    candidate_models = [requested_model]
+    for fallback in DEEPSEEK_FALLBACK_MODELS:
+        if fallback not in candidate_models:
+            candidate_models.append(fallback)
 
-            # max_tokens fallback (try once)
-            if (
-                attempt == 0
-                and kwargs.get("max_tokens") != DEEPSEEK_MAX_TOKENS_FALLBACK
-                and "max_tokens" in err_text
-            ):
-                retry_kwargs = dict(kwargs)
-                retry_kwargs["max_tokens"] = DEEPSEEK_MAX_TOKENS_FALLBACK
-                try:
-                    return await client.chat.completions.create(**retry_kwargs)
-                except Exception as e2:
-                    last_error = e2
-                    if not _is_retryable(e2):
-                        raise
+    for model_index, model_name in enumerate(candidate_models):
+        model_kwargs = dict(kwargs)
+        model_kwargs["model"] = model_name
+        retry_budget = max_retries if model_index == 0 else max(1, min(2, max_retries))
 
-            # Retry for transient errors
-            if _is_retryable(e) and attempt < max_retries - 1:
-                delay = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
-                logger.warning(
-                    "LLM request failed (attempt %d/%d), retrying in %ds: %s",
-                    attempt + 1, max_retries, delay, str(e)[:200],
-                )
-                await asyncio.sleep(delay)
-                continue
+        for attempt in range(retry_budget):
+            try:
+                return await client.chat.completions.create(**model_kwargs)
+            except Exception as e:
+                last_error = e
+                err_text = str(e).lower()
 
-            raise
+                # max_tokens fallback (try once per model)
+                if (
+                    attempt == 0
+                    and model_kwargs.get("max_tokens") != DEEPSEEK_MAX_TOKENS_FALLBACK
+                    and "max_tokens" in err_text
+                ):
+                    retry_kwargs = dict(model_kwargs)
+                    retry_kwargs["max_tokens"] = DEEPSEEK_MAX_TOKENS_FALLBACK
+                    try:
+                        return await client.chat.completions.create(**retry_kwargs)
+                    except Exception as e2:
+                        last_error = e2
+                        if _is_model_not_found(e2):
+                            logger.warning(
+                                "LLM model `%s` unavailable after max_tokens fallback, trying next model.",
+                                model_name,
+                            )
+                            break
+                        if not _is_retryable(e2):
+                            raise
+
+                if _is_model_not_found(e):
+                    logger.warning(
+                        "LLM model `%s` unavailable, trying fallback model.",
+                        model_name,
+                    )
+                    break
+
+                # Retry for transient errors
+                if _is_retryable(e) and attempt < retry_budget - 1:
+                    delay = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
+                    logger.warning(
+                        "LLM request failed (model=%s attempt %d/%d), retrying in %ds: %s",
+                        model_name,
+                        attempt + 1,
+                        retry_budget,
+                        delay,
+                        str(e)[:200],
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+
+                raise
 
     raise last_error  # type: ignore
 

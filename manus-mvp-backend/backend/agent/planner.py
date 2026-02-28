@@ -364,12 +364,21 @@ class Planner:
 
     async def create_plan(self, user_message: str, use_llm: bool = True) -> TaskPlan:
         """Create a plan, trying LLM first then falling back to template."""
+        plan, _ = await self.create_plan_with_source(user_message, use_llm=use_llm)
+        return plan
+
+    async def create_plan_with_source(
+        self,
+        user_message: str,
+        use_llm: bool = True,
+    ) -> tuple[TaskPlan, str]:
+        """Create plan and return source (`llm` or `template`)."""
         if use_llm and self._llm_func:
             llm_plan = await self.create_plan_with_llm(user_message)
             if llm_plan:
-                return llm_plan
+                return llm_plan, "llm"
 
-        return self.create_template_plan(user_message)
+        return self.create_template_plan(user_message), "template"
 
     def advance_phase(self, plan: TaskPlan) -> bool:
         """Advance to the next phase in the plan."""

@@ -32,6 +32,7 @@ export interface Conversation {
   messages: Message[];
   messageCount?: number;
   createdAt: string;
+  planSource?: string;
   awaitingResume?: boolean;
   resumePending?: boolean;
 }
@@ -109,6 +110,7 @@ export interface PlanUpdateEventData {
   reason?: string;
   plan?: TaskPlanData;
   todo_path?: string;
+  plan_source?: string;
 }
 
 // ============ 子代理索引类型 ============

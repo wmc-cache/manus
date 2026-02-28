@@ -30,6 +30,25 @@ const PLAN_STATUS_LABEL: Record<string, string> = {
   failed: "失败",
 };
 
+const PLAN_REASON_LABEL: Record<string, string> = {
+  initialized: "已生成计划",
+  resumed: "继续执行",
+  executing: "进入执行",
+  phase_advanced: "推进下一阶段",
+  finalizing: "进入总结阶段",
+  completed: "任务完成",
+  paused_manual_takeover: "手动接管暂停",
+  failed_invalid_args: "参数错误中断",
+  finalizing_tool_loop: "循环后总结",
+  completed_tool_loop: "循环后完成",
+  limit_reached: "达到轮数上限",
+};
+
+const PLAN_SOURCE_LABEL: Record<string, string> = {
+  llm: "模型计划",
+  template: "模板计划",
+};
+
 const SUB_AGENT_STATUS_LABEL: Record<string, string> = {
   running: "执行中",
   completed: "已完成",
@@ -83,6 +102,7 @@ export default function Home() {
     limitReached,
     continueMessage,
     plan,
+    planSource,
     planReason,
     todoPath,
     subAgentIndex,
@@ -442,9 +462,14 @@ export default function Home() {
                   <div className="mx-4 mb-3 rounded-xl border border-border/30 bg-background/40 p-3">
                     <div className="flex items-center justify-between gap-2">
                       <p className="text-xs text-muted-foreground">执行计划</p>
-                      {planReason && (
-                        <span className="text-[11px] text-muted-foreground/80">{planReason}</span>
-                      )}
+                      <div className="flex items-center gap-2 text-[11px] text-muted-foreground/80">
+                        {planSource && (
+                          <span>{PLAN_SOURCE_LABEL[planSource] || planSource}</span>
+                        )}
+                        {planReason && (
+                          <span>{PLAN_REASON_LABEL[planReason] || planReason}</span>
+                        )}
+                      </div>
                     </div>
                     <p className="mt-1 text-sm text-foreground/95">{plan.goal || "当前任务"}</p>
                     <div className="mt-2 space-y-1">

@@ -322,7 +322,7 @@ class AgentEngine:
             return ""
 
     def _build_plan_update_payload(self, conversation: Conversation, reason: str) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {"reason": reason}
+        payload: Dict[str, Any] = {"reason": reason, "plan_source": conversation.plan_source}
         if conversation.plan:
             payload["plan"] = self._serialize_plan(conversation.plan)
             todo_path = self._persist_todo(conversation)
@@ -330,15 +330,15 @@ class AgentEngine:
                 payload["todo_path"] = todo_path
         return payload
 
-    async def _create_plan_for_turn(self, user_message: str) -> TaskPlan:
+    async def _create_plan_for_turn(self, user_message: str) -> tuple[TaskPlan, str]:
         try:
-            return await self._planner.create_plan(
+            return await self._planner.create_plan_with_source(
                 user_message=user_message,
                 use_llm=self._plan_use_llm,
             )
         except Exception as exc:
             logger.warning("Plan creation failed, fallback to template: %s", exc)
-            return self._planner.create_template_plan(user_message)
+            return self._planner.create_template_plan(user_message), "template"
 
     @staticmethod
     def _is_continue_message(user_message: str) -> bool:
@@ -346,12 +346,16 @@ class AgentEngine:
 
     async def _ensure_plan_for_turn(self, conversation: Conversation, user_message: str) -> str:
         if conversation.plan is None or not self._is_continue_message(user_message):
-            conversation.plan = await self._create_plan_for_turn(user_message)
+            plan, source = await self._create_plan_for_turn(user_message)
+            conversation.plan = plan
+            conversation.plan_source = source
             return "initialized"
 
         plan = conversation.plan
         if not plan.phases:
-            conversation.plan = await self._create_plan_for_turn(user_message)
+            next_plan, source = await self._create_plan_for_turn(user_message)
+            conversation.plan = next_plan
+            conversation.plan_source = source
             return "initialized"
 
         # 若无运行阶段，则继续当前未完成阶段
@@ -762,6 +766,7 @@ class AgentEngine:
         while iteration < MAX_ITERATIONS:
             iteration += 1
             stop_due_tool_loop = False
+            completed_tools_this_iteration = 0
 
             # 发送思考状态
             yield {
@@ -1061,6 +1066,7 @@ class AgentEngine:
 
                     # 记录工具签名用于循环检测
                     if status == ToolCallStatus.COMPLETED:
+                        completed_tools_this_iteration += 1
                         signature = self._build_tool_signature(tc.name, tc.arguments)
                         recent_tool_signatures.append(signature)
                         if len(recent_tool_signatures) > TOOL_LOOP_WINDOW:
@@ -1200,6 +1206,7 @@ class AgentEngine:
                                         }
                                 tc.result = result
                                 tc.status = ToolCallStatus.COMPLETED
+                                completed_tools_this_iteration += 1
                         except Exception as e:
                             err_text = str(e)
                             result = f"工具执行失败: {err_text}"
@@ -1378,6 +1385,21 @@ class AgentEngine:
                 }
                 completed = True
                 break
+
+            has_pending_phase = bool(
+                conversation.plan
+                and any(phase.status == PlanPhaseStatus.PENDING for phase in conversation.plan.phases)
+            )
+            if completed_tools_this_iteration > 0 and has_pending_phase and self._advance_plan_phase(conversation.plan):
+                self._save_conversations()
+                if conversation.plan:
+                    yield {
+                        "event": SSEEventType.PLAN_UPDATE,
+                        "data": json.dumps(
+                            self._build_plan_update_payload(conversation, reason="phase_advanced"),
+                            ensure_ascii=False,
+                        ),
+                    }
 
         if not completed and iteration >= MAX_ITERATIONS:
             limit_notice = (

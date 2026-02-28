@@ -111,6 +111,7 @@ interface AgentState {
   limitReached: boolean;
   continueMessage: string | null;
   plan: TaskPlanData | null;
+  planSource: string | null;
   planReason: string | null;
   todoPath: string | null;
   subAgentIndex: SubAgentIndexData | null;
@@ -135,6 +136,7 @@ interface ConversationListResponse {
     title: string;
     message_count: number;
     created_at: string;
+    plan_source?: string;
     awaiting_resume?: boolean;
     resume_pending?: boolean;
   }>;
@@ -168,6 +170,7 @@ interface ConversationDetailResponse {
   awaiting_resume?: boolean;
   resume_pending?: boolean;
   plan?: TaskPlanData | null;
+  plan_source?: string;
   sub_agent_index?: unknown;
   created_at: string;
 }
@@ -204,6 +207,7 @@ function normalizeConversations(payload: ConversationListResponse): Conversation
     messages: [],
     messageCount: item.message_count || 0,
     createdAt: item.created_at || new Date().toISOString(),
+    planSource: typeof item.plan_source === "string" ? item.plan_source : undefined,
     awaitingResume: Boolean(item.awaiting_resume),
     resumePending: Boolean(item.resume_pending),
   }));
@@ -435,6 +439,7 @@ export function useAgent() {
     limitReached: false,
     continueMessage: null,
     plan: null,
+    planSource: null,
     planReason: null,
     todoPath: null,
     subAgentIndex: null,
@@ -517,6 +522,7 @@ export function useAgent() {
         limitReached,
         continueMessage,
         plan: normalizePlan(data.plan),
+        planSource: typeof data.plan_source === "string" ? data.plan_source : null,
         planReason: null,
         todoPath: null,
         subAgentIndex: normalizeSubAgentIndex(data.sub_agent_index),
@@ -589,6 +595,7 @@ export function useAgent() {
         limitReached: false,
         continueMessage: null,
         plan: null,
+        planSource: null,
         planReason: null,
         todoPath: null,
         subAgentIndex: null,
@@ -845,6 +852,7 @@ export function useAgent() {
                   setState((prev) => ({
                     ...prev,
                     plan: normalizedPlan ?? prev.plan,
+                    planSource: typeof planData.plan_source === "string" ? planData.plan_source : prev.planSource,
                     planReason: typeof planData.reason === "string" ? planData.reason : prev.planReason,
                     todoPath: typeof planData.todo_path === "string" ? planData.todo_path : prev.todoPath,
                   }));
@@ -1010,6 +1018,7 @@ export function useAgent() {
         limitReached: false,
         continueMessage: null,
         plan: null,
+        planSource: null,
         planReason: null,
         todoPath: null,
         subAgentIndex: null,
@@ -1041,6 +1050,7 @@ export function useAgent() {
       limitReached: false,
       continueMessage: null,
       plan: null,
+      planSource: null,
       planReason: null,
       todoPath: null,
       subAgentIndex: null,

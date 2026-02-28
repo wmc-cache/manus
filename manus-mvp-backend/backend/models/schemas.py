@@ -82,6 +82,7 @@ class Conversation(BaseModel):
     title: str = "新对话"
     messages: List[Message] = Field(default_factory=list)
     plan: Optional[TaskPlan] = None
+    plan_source: str = "template"
     manual_takeover_enabled: bool = False
     manual_takeover_target: str = "all"
     limit_reached: bool = False
