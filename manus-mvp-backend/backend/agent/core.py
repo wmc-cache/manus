@@ -91,6 +91,7 @@ DEFAULT_TOOL_NAMES = [
     "spawn_sub_agents",
     "shell_exec",
     "execute_code",
+    "expose_port",
     "browser_navigate",
     "browser_screenshot",
     "browser_get_content",

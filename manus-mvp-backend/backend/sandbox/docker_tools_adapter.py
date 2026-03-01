@@ -77,7 +77,7 @@ async def docker_shell_exec(
             conversation_id=conversation_id,
             timeout=5,
         )
-        result = "后台命令已在沙箱容器中启动。"
+        result = "后台命令已在沙箱容器中启动。\n提示：若该服务提供 Web 访问（如 HTTP 服务器、Flask、Node.js 等），请立即调用 expose_port 工具暴露端口，让用户可通过浏览器访问。"
         await event_bus.publish(SandboxEvent(
             "terminal_output",
             {"session_id": "default", "data": f"{result}\n"},

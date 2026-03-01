@@ -1182,14 +1182,30 @@ async def execute_code(code: str) -> str:
 # ============ 工具：暴露端口（生成可访问链接）============
 async def expose_port(port: int, label: str = "") -> str:
     """暴露沙箱内的 Web 服务端口，生成可从实体机浏览器直接访问的链接"""
+    from sandbox.port_expose import docker_exec_proxy
     conversation_id = _get_current_conversation_id() or "_default"
     internal_host = port_expose_manager.resolve_internal_host(conversation_id)
+
+    # 在 macOS Docker Desktop bridge 模式下，容器 IP/名称对宿主机不可达。
+    # 通过 docker exec TCP 隧道将本地端口转发到容器内部服务。
+    target_port = 0
+    if internal_host not in ("localhost", "127.0.0.1") and not internal_host.startswith("127."):
+        try:
+            from sandbox.docker_sandbox import _container_name
+            container_name = _container_name(conversation_id)
+            tunnel_key = f"{conversation_id}:{port}"
+            local_port = await docker_exec_proxy.create_tunnel(container_name, port, tunnel_key)
+            internal_host = "127.0.0.1"
+            target_port = local_port
+        except Exception as exc:
+            logger.warning("创建 docker exec 隧道失败，使用直连: %s", exc)
 
     entry = port_expose_manager.expose(
         port=port,
         conversation_id=conversation_id,
         label=label or f"Port {port}",
         internal_host=internal_host,
+        target_port=target_port,
     )
 
     # 构建用户可访问的 URL
@@ -1213,8 +1229,7 @@ async def expose_port(port: int, label: str = "") -> str:
         f"端口 {port} 已成功暴露！\n"
         f"用户可通过以下链接在浏览器中直接访问：\n"
         f"  相对路径: {proxy_path}\n"
-        f"  完整地址: http://localhost:8000{proxy_path}\n"
-        f"如果前端运行在 3000 端口，也可通过: http://localhost:3000{proxy_path}"
+        f"  完整地址: http://localhost:3000{proxy_path}"
     )
 
 
@@ -1449,7 +1464,6 @@ TOOL_REGISTRY = {
             "label": args.get("label", ""),
         },
         "required_keys": ["port"],
-        "non_empty_keys": ["port"],
         "int_keys": ["port"],
         "string_keys": ["label"],
         "usage_hint": '示例: {"port": 8080, "label": "我的网站"}',

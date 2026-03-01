@@ -1043,7 +1043,8 @@ async def proxy_to_sandbox(conversation_id: str, port: int, path: str, request: 
     if not entry:
         raise HTTPException(status_code=404, detail=f"端口 {port} 未暴露（会话: {conversation_id}）")
 
-    target_url = f"http://{entry.internal_host}:{entry.port}/{path}"
+    base_url = port_expose_manager.get_target_url(port, conversation_id)
+    target_url = f"{base_url}/{path}"
     if request.url.query:
         target_url += f"?{request.url.query}"
 
@@ -1056,7 +1057,8 @@ async def proxy_to_sandbox(conversation_id: str, port: int, path: str, request: 
         k: v for k, v in request.headers.items()
         if k.lower() not in hop_by_hop
     }
-    headers["host"] = f"{entry.internal_host}:{entry.port}"
+    actual_port = entry.target_port if entry.target_port else entry.port
+    headers["host"] = f"{entry.internal_host}:{actual_port}"
 
     try:
         async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
@@ -1083,7 +1085,12 @@ async def proxy_to_sandbox(conversation_id: str, port: int, path: str, request: 
     except httpx.ConnectError:
         raise HTTPException(
             status_code=502,
-            detail=f"无法连接到沙箱服务 {entry.internal_host}:{entry.port}，请确认服务已启动",
+            detail=f"无法连接到沙箱服务（端口 {entry.port}），请确认服务已启动",
+        )
+    except httpx.RemoteProtocolError:
+        raise HTTPException(
+            status_code=502,
+            detail=f"沙箱容器未运行或服务（端口 {entry.port}）未启动，请重新运行服务后再试",
         )
     except httpx.TimeoutException:
         raise HTTPException(status_code=504, detail="代理请求超时")
