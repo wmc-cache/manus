@@ -21,11 +21,19 @@ is_pid_running() {
   kill -0 "$pid" >/dev/null 2>&1
 }
 
-ensure_port_free() {
+stop_port_service() {
   local port="$1"
-  if command -v lsof >/dev/null 2>&1 && lsof -tiTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
-    echo "Port $port is already in use. Stop the existing process first."
-    exit 1
+  if command -v lsof >/dev/null 2>&1; then
+    local pids
+    pids="$(lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"
+    if [[ -n "$pids" ]]; then
+      echo "Stopping services on port $port (PIDs: $pids)"
+      kill $pids 2>/dev/null || true
+      # 等待进程完全终止
+      sleep 2
+      # 强制杀死仍在运行的进程
+      kill -9 $pids 2>/dev/null || true
+    fi
   fi
 }
 
@@ -49,7 +57,7 @@ start_backend() {
     exit 1
   fi
 
-  ensure_port_free "$BACKEND_PORT"
+  stop_port_service "$BACKEND_PORT"
 
   (
     cd "$BACKEND_DIR"
@@ -83,7 +91,7 @@ start_frontend() {
     exit 1
   fi
 
-  ensure_port_free "$FRONTEND_PORT"
+  stop_port_service "$FRONTEND_PORT"
 
   (
     cd "$FRONTEND_DIR"
