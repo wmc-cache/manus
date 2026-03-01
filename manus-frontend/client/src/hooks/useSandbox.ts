@@ -81,6 +81,13 @@ export interface BrowserData {
   status?: number;
 }
 
+export interface ExposedPort {
+  port: number;
+  label: string;
+  proxyPath: string;
+  conversationId: string;
+}
+
 export type ActiveWindow = "terminal" | "editor" | "browser";
 export type ManualTakeoverTarget = "all" | "terminal" | "browser";
 
@@ -97,6 +104,7 @@ export function useSandbox() {
   const [manualBlockedReason, setManualBlockedReason] = useState<string | null>(null);
   const [browserInteractionError, setBrowserInteractionError] = useState<string | null>(null);
   const [downloadingAllFiles, setDownloadingAllFiles] = useState(false);
+  const [exposedPorts, setExposedPorts] = useState<ExposedPort[]>([]);
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -297,6 +305,22 @@ export function useSandbox() {
             case "file_changed":
               // [优化] 使用防抖刷新文件树，合并短时间内的多次 file_changed 事件
               debouncedFetchFileTree();
+              break;
+
+            case "port_exposed":
+              {
+                const newPort: ExposedPort = {
+                  port: data.data.port as number,
+                  label: (data.data.label as string) || `Port ${data.data.port}`,
+                  proxyPath: data.data.proxy_path as string,
+                  conversationId: (data.data.conversation_id as string) || "",
+                };
+                setExposedPorts((prev) => {
+                  // 替换相同端口的旧记录
+                  const filtered = prev.filter((p) => p.port !== newPort.port);
+                  return [...filtered, newPort];
+                });
+              }
               break;
           }
         } catch {
@@ -514,5 +538,6 @@ export function useSandbox() {
     fetchFileContent,
     downloadAllFiles,
     switchConversation,
+    exposedPorts,
   };
 }

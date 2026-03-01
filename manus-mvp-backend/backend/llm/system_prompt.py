@@ -70,6 +70,9 @@ def build_system_prompt(
 - **browser_input** - 在浏览器输入框中输入文本
 - **browser_scroll** - 滚动浏览器页面
 
+### 端口暴露
+- **expose_port** - 暴露沙箱内的 Web 服务端口，生成可从实体机浏览器直接访问的链接（启动 HTTP 服务后使用）
+
 ### 文件操作
 - **read_file** - 读取文件内容（支持指定行范围）
 - **write_file** - 创建或覆写文件（适用于新文件或需要大量修改的文件）
@@ -141,6 +144,7 @@ def build_system_prompt(
 - 文件小修改 → edit_file（优先于 write_file）
 - 文件创建/大量写入 → write_file
 - 文件增量追加 → append_file
+- 启动 Web 服务后暴露给用户访问 → shell_exec 启动服务 + expose_port 生成链接
 - 查看目录结构 → list_files
 - 按名称/模式查找文件 → find_files
 - 在文件内容中搜索 → grep_files

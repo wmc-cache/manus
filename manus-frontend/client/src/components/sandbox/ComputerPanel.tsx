@@ -20,6 +20,7 @@ import {
   X,
   Hand,
   Loader2,
+  ExternalLink,
 } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 import TerminalWindow from "./TerminalWindow";
@@ -32,6 +33,7 @@ import type {
   FileContent,
   BrowserData,
   ManualTakeoverTarget,
+  ExposedPort,
 } from "@/hooks/useSandbox";
 
 /** 工具名称到面板标签页的映射 */
@@ -108,6 +110,8 @@ interface ComputerPanelProps {
   currentTool?: CurrentToolInfo | null;
   /** Agent 是否正在工作 */
   isAgentWorking?: boolean;
+  /** 已暴露的端口列表 */
+  exposedPorts?: ExposedPort[];
 }
 
 const tabs: { id: ActiveWindow; label: string; icon: typeof Terminal }[] = [
@@ -141,6 +145,7 @@ export default function ComputerPanel({
   onClose,
   currentTool,
   isAgentWorking = false,
+  exposedPorts = [],
 }: ComputerPanelProps) {
   const [isMaximized, setIsMaximized] = useState(false);
   const autoSwitchRef = useRef(true);
@@ -263,6 +268,29 @@ export default function ComputerPanel({
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* 已暴露端口链接栏 */}
+      {exposedPorts.length > 0 && (
+        <div className="flex items-center gap-2 px-4 py-1.5 bg-[oklch(0.13_0.02_200)] border-b border-border/20">
+          <ExternalLink className="w-3 h-3 text-sky-400 flex-shrink-0" />
+          <span className="text-[10px] text-sky-300/80 flex-shrink-0">已暴露:</span>
+          <div className="flex items-center gap-2 overflow-x-auto">
+            {exposedPorts.map((ep) => (
+              <a
+                key={ep.port}
+                href={ep.proxyPath}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-sky-500/15 text-sky-300 text-[10px] font-mono hover:bg-sky-500/25 transition-colors whitespace-nowrap"
+                title={`点击在新标签页打开 ${ep.label}`}
+              >
+                <ExternalLink className="w-2.5 h-2.5" />
+                {ep.label} (:{ep.port})
+              </a>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* 标签栏 */}
       <div className="flex items-center gap-1 px-3 py-1.5 bg-[oklch(0.14_0.013_260)] border-b border-border/15">

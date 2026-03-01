@@ -491,6 +491,27 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "expose_port",
+            "description": "暴露沙箱内的 Web 服务端口，生成可从实体机浏览器直接访问的链接。在沙箱内启动 HTTP 服务后调用此工具，用户就可以在自己的浏览器中直接访问。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "port": {
+                        "type": "integer",
+                        "description": "要暴露的端口号（如 8080、3000 等）"
+                    },
+                    "label": {
+                        "type": "string",
+                        "description": "可选，服务描述标签（如 '我的网站'、'API 服务'）"
+                    }
+                },
+                "required": ["port"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "grep_files",
             "description": "使用正则表达式搜索文件内容。支持上下文行显示。结果按文件修改时间倒序排列。适合在项目中查找特定代码、配置或文本。",
             "parameters": {

@@ -432,6 +432,7 @@ export default function Home() {
                   browserInteractionError={sandbox.browserInteractionError}
                   currentTool={currentToolCall ? { name: currentToolCall.name, arguments: currentToolCall.arguments } : null}
                   isAgentWorking={isLoading}
+                  exposedPorts={sandbox.exposedPorts}
                 />
               </div>
 

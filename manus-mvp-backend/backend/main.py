@@ -32,6 +32,8 @@ from agent.core import agent_engine
 from sandbox.event_bus import event_bus, SandboxEvent
 from sandbox.filesystem import get_file_tree, read_file_content, get_workspace_root, delete_workspace
 from sandbox.browser import browser_service
+from sandbox.port_expose import port_expose_manager
+import httpx
 
 # 监控 API
 try:
@@ -277,6 +279,9 @@ def _load_sub_agent_session(conversation_id: str, session_id: str):
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
     # 仅拦截业务 API，保留健康检查可匿名探活
+    # 代理路径和健康检查无需鉴权
+    if request.url.path.startswith("/proxy/"):
+        return await call_next(request)
     if request.url.path.startswith("/api/") and request.url.path != "/api/health":
         if not _is_authorized_http(request):
             return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
@@ -976,6 +981,114 @@ async def get_sandbox_status():
         "browser": browser_service.get_status(),
         "workspace_base": "/tmp/manus_workspace",
     }
+
+
+# ============ 端口暴露代理 API ============
+
+@app.get("/api/sandbox/exposed-ports")
+async def list_exposed_ports(conversation_id: str = Query(None)):
+    """列出当前会话已暴露的端口"""
+    ports = port_expose_manager.list_exposed(conversation_id)
+    return {
+        "ports": [
+            {
+                "port": ep.port,
+                "label": ep.label,
+                "url": f"/proxy/{ep.conversation_id}/{ep.port}/",
+                "created_at": ep.created_at,
+            }
+            for ep in ports
+        ]
+    }
+
+
+@app.post("/api/sandbox/expose-port")
+async def api_expose_port(request: Request):
+    """手动注册端口暴露（供测试或外部调用）"""
+    body = await request.json()
+    port_val = int(body.get("port", 0))
+    conv_id = body.get("conversation_id", "_default")
+    label = body.get("label", f"Port {port_val}")
+    internal_host = body.get("internal_host", "localhost")
+
+    if not port_val:
+        raise HTTPException(status_code=400, detail="port 是必填参数")
+
+    entry = port_expose_manager.expose(
+        port=port_val,
+        conversation_id=conv_id,
+        label=label,
+        internal_host=internal_host,
+    )
+    return {
+        "port": entry.port,
+        "label": entry.label,
+        "url": f"/proxy/{entry.conversation_id}/{entry.port}/",
+        "internal_host": entry.internal_host,
+    }
+
+
+@app.api_route(
+    "/proxy/{conversation_id}/{port}/{path:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
+)
+async def proxy_to_sandbox(conversation_id: str, port: int, path: str, request: Request):
+    """
+    反向代理：将请求转发到沙箱容器内的 Web 服务。
+    
+    路径格式: /proxy/{conversation_id}/{port}/{path}
+    例如: /proxy/_default/8080/index.html
+    """
+    entry = port_expose_manager.get(port, conversation_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail=f"端口 {port} 未暴露（会话: {conversation_id}）")
+
+    target_url = f"http://{entry.internal_host}:{entry.port}/{path}"
+    if request.url.query:
+        target_url += f"?{request.url.query}"
+
+    # 读取请求体
+    body = await request.body()
+
+    # 构建转发请求头（过滤 hop-by-hop 头）
+    hop_by_hop = {"connection", "keep-alive", "transfer-encoding", "te", "trailer", "upgrade", "host"}
+    headers = {
+        k: v for k, v in request.headers.items()
+        if k.lower() not in hop_by_hop
+    }
+    headers["host"] = f"{entry.internal_host}:{entry.port}"
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            resp = await client.request(
+                method=request.method,
+                url=target_url,
+                headers=headers,
+                content=body,
+            )
+
+        # 构建响应头
+        excluded_headers = {"content-encoding", "content-length", "transfer-encoding", "connection"}
+        response_headers = {
+            k: v for k, v in resp.headers.items()
+            if k.lower() not in excluded_headers
+        }
+
+        return StreamingResponse(
+            content=iter([resp.content]),
+            status_code=resp.status_code,
+            headers=response_headers,
+            media_type=resp.headers.get("content-type"),
+        )
+    except httpx.ConnectError:
+        raise HTTPException(
+            status_code=502,
+            detail=f"无法连接到沙箱服务 {entry.internal_host}:{entry.port}，请确认服务已启动",
+        )
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="代理请求超时")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"代理错误: {str(e)}")
 
 
 # ============ 注册监控 API ============

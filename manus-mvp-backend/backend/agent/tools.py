@@ -16,6 +16,7 @@ from llm.deepseek import chat_completion
 from sandbox.event_bus import event_bus, SandboxEvent
 from sandbox.browser import browser_service
 from sandbox.filesystem import notify_file_change, get_workspace_root
+from sandbox.port_expose import port_expose_manager
 
 # Import extended tools
 try:
@@ -1178,6 +1179,45 @@ async def execute_code(code: str) -> str:
         return f"代码执行出错: {str(e)}\n{traceback.format_exc()}"
 
 
+# ============ 工具：暴露端口（生成可访问链接）============
+async def expose_port(port: int, label: str = "") -> str:
+    """暴露沙箱内的 Web 服务端口，生成可从实体机浏览器直接访问的链接"""
+    conversation_id = _get_current_conversation_id() or "_default"
+    internal_host = port_expose_manager.resolve_internal_host(conversation_id)
+
+    entry = port_expose_manager.expose(
+        port=port,
+        conversation_id=conversation_id,
+        label=label or f"Port {port}",
+        internal_host=internal_host,
+    )
+
+    # 构建用户可访问的 URL
+    # 这个 URL 通过后端反向代理路由转发到沙箱容器
+    proxy_path = f"/proxy/{conversation_id}/{port}/"
+
+    # 发布事件通知前端
+    await event_bus.publish(SandboxEvent(
+        "port_exposed",
+        {
+            "port": port,
+            "label": entry.label,
+            "proxy_path": proxy_path,
+            "conversation_id": conversation_id,
+        },
+        window_id="browser",
+        conversation_id=conversation_id,
+    ))
+
+    return (
+        f"端口 {port} 已成功暴露！\n"
+        f"用户可通过以下链接在浏览器中直接访问：\n"
+        f"  相对路径: {proxy_path}\n"
+        f"  完整地址: http://localhost:8000{proxy_path}\n"
+        f"如果前端运行在 3000 端口，也可通过: http://localhost:3000{proxy_path}"
+    )
+
+
 # ============ 工具：浏览器导航（联动浏览器窗口）============
 async def browser_navigate(url: str) -> str:
     """在浏览器中打开指定 URL"""
@@ -1401,6 +1441,18 @@ TOOL_REGISTRY = {
         "non_empty_keys": ["path"],
         "string_keys": ["path", "content"],
         "usage_hint": '示例: {"path": "report.md", "content": "# 报告"}',
+    },
+    "expose_port": {
+        "func": expose_port,
+        "extract_args": lambda args: {
+            "port": int(args.get("port", 0)),
+            "label": args.get("label", ""),
+        },
+        "required_keys": ["port"],
+        "non_empty_keys": ["port"],
+        "int_keys": ["port"],
+        "string_keys": ["label"],
+        "usage_hint": '示例: {"port": 8080, "label": "我的网站"}',
     },
 }
 
