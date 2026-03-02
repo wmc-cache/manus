@@ -1208,6 +1208,34 @@ async def expose_port(port: int, label: str = "") -> str:
         target_port=target_port,
     )
 
+    # 端口可达性预检：避免在服务尚未启动时返回“成功链接”。
+    # 最多重试约 2 秒，兼容刚启动的服务。
+    actual_port = entry.target_port if entry.target_port else entry.port
+    reachable = False
+    for _ in range(8):
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(entry.internal_host, actual_port),
+                timeout=0.4,
+            )
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:
+                pass
+            reachable = True
+            break
+        except Exception:
+            await asyncio.sleep(0.25)
+
+    if not reachable:
+        port_expose_manager.unexpose(port, conversation_id)
+        return (
+            f"端口暴露失败：无法连接到服务 {entry.internal_host}:{actual_port}。\n"
+            "请先确认 Web 服务已成功启动并正在监听该端口，再调用 expose_port。\n"
+            f"建议先执行：curl -I http://127.0.0.1:{port}/"
+        )
+
     # 构建用户可访问的 URL
     # 这个 URL 通过后端反向代理路由转发到沙箱容器
     proxy_path = f"/proxy/{conversation_id}/{port}/"

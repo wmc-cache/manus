@@ -730,6 +730,18 @@ class DockerSandboxManager:
         """休眠所有空闲容器。"""
         for cid, sandbox in list(self._sandboxes.items()):
             if sandbox.is_idle and sandbox.status == "running":
+                # 如果当前会话仍有暴露端口，保持容器运行，避免已公开 URL 失效。
+                try:
+                    from sandbox.port_expose import port_expose_manager
+                    if port_expose_manager.list_exposed(cid):
+                        logger.info(
+                            "容器空闲但会话仍有暴露端口，跳过自动休眠: %s",
+                            sandbox.container_name,
+                        )
+                        continue
+                except Exception as exc:
+                    logger.debug("检查暴露端口失败，继续按默认策略清理: %s", exc)
+
                 logger.info("容器空闲超时，自动休眠: %s", sandbox.container_name)
                 await self.stop_container(cid)
 

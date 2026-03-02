@@ -14,6 +14,8 @@ Docker 沙箱工具适配层
 import asyncio
 import logging
 import os
+import re
+import shlex
 from typing import Any, Dict, Optional, Tuple
 
 from sandbox.docker_sandbox import (
@@ -31,6 +33,18 @@ DOCKER_SANDBOX_ENABLED = os.environ.get(
     "MANUS_DOCKER_SANDBOX", "true"
 ).strip().lower() in ("true", "1", "yes")
 
+_BG_COMMAND_RE = re.compile(r"(?<!&)&\s*$")
+
+
+def _is_background_shell_command(command: str) -> bool:
+    """是否为显式后台命令（以单个 & 结尾）。"""
+    return bool(_BG_COMMAND_RE.search((command or "").strip()))
+
+
+def _strip_background_suffix(command: str) -> str:
+    """移除命令末尾单个后台标记 &。"""
+    return _BG_COMMAND_RE.sub("", (command or "").strip()).strip()
+
 
 async def _ensure_initialized():
     """确保 Docker 沙箱管理器已初始化。"""
@@ -41,6 +55,41 @@ async def _ensure_initialized():
 def _is_docker_available() -> bool:
     """检查 Docker 是否可用。"""
     return DOCKER_SANDBOX_ENABLED
+
+
+def _rewrite_host_workspace_paths(command: str, conversation_id: Optional[str]) -> str:
+    """
+    将命令中的宿主机 workspace 绝对路径改写为容器内路径。
+
+    例如：
+    - /tmp/manus_workspace/<cid> -> /tmp/workspace
+    - /private/tmp/manus_workspace/<cid> -> /tmp/workspace
+    """
+    if not command or not conversation_id:
+        return command
+
+    try:
+        host_workspace = sandbox_manager.get_workspace_root(conversation_id)
+    except Exception:
+        return command
+
+    candidates = {
+        host_workspace,
+        os.path.realpath(host_workspace),
+        os.path.abspath(host_workspace),
+    }
+
+    rewritten = command
+    for src in sorted((p for p in candidates if p), key=len, reverse=True):
+        rewritten = rewritten.replace(src, CONTAINER_WORKSPACE)
+
+    if rewritten != command:
+        logger.info(
+            "已将命令中的宿主机 workspace 路径改写为容器路径: %s -> %s",
+            command,
+            rewritten,
+        )
+    return rewritten
 
 
 # ---------------------------------------------------------------------------
@@ -70,13 +119,46 @@ async def docker_shell_exec(
         conversation_id=conversation_id,
     ))
 
+    normalized_command = _rewrite_host_workspace_paths(command, conversation_id)
+
     # 检查是否为后台命令
-    if command.strip().endswith("&"):
+    if _is_background_shell_command(normalized_command):
+        foreground_cmd = _strip_background_suffix(normalized_command)
+        if not foreground_cmd:
+            result = "后台命令启动失败：命令内容为空。"
+            await event_bus.publish(SandboxEvent(
+                "terminal_output",
+                {"session_id": "default", "data": f"{result}\n"},
+                window_id="terminal_default",
+                conversation_id=conversation_id,
+            ))
+            return result
+
+        # 通过单独 launcher 进程启动后台任务，并显式重定向所有标准流。
+        # 注意：command 本身可能已包含复杂引号和管道，使用 bash -lc + shlex.quote 包裹。
+        launch_cmd = (
+            "nohup /bin/bash -lc "
+            f"{shlex.quote(foreground_cmd)} "
+            "> /dev/null 2>&1 < /dev/null &"
+        )
         return_code, stdout, stderr = await sandbox_manager.exec_command(
-            f"nohup {command} > /dev/null 2>&1",
+            launch_cmd,
             conversation_id=conversation_id,
             timeout=5,
         )
+        if return_code != 0:
+            detail = (stderr or stdout or "").strip()
+            result = "后台命令启动失败。"
+            if detail:
+                result += f"\n{detail}"
+            await event_bus.publish(SandboxEvent(
+                "terminal_output",
+                {"session_id": "default", "data": f"{result}\n"},
+                window_id="terminal_default",
+                conversation_id=conversation_id,
+            ))
+            return result
+
         result = "后台命令已在沙箱容器中启动。\n提示：若该服务提供 Web 访问（如 HTTP 服务器、Flask、Node.js 等），请立即调用 expose_port 工具暴露端口，让用户可通过浏览器访问。"
         await event_bus.publish(SandboxEvent(
             "terminal_output",
@@ -88,7 +170,7 @@ async def docker_shell_exec(
 
     # 正常命令执行
     return_code, stdout, stderr = await sandbox_manager.exec_command(
-        command,
+        normalized_command,
         conversation_id=conversation_id,
         timeout=timeout,
     )

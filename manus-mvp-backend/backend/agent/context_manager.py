@@ -634,17 +634,19 @@ class ToolStateMachine:
             "browser_navigate", "browser_get_content", "browser_screenshot",
             "browser_click", "browser_input", "browser_scroll",
             "read_file", "write_file", "edit_file", "find_files", "grep_files",
+            "expose_port",
         },
         "data_analysis": {
             "data_analysis", "execute_code", "shell_exec",
             "read_file", "write_file", "edit_file", "list_files",
-            "find_files", "grep_files",
+            "find_files", "grep_files", "expose_port",
         },
         "web_development": {
             "shell_exec", "execute_code",
             "read_file", "write_file", "edit_file", "append_file",
             "list_files", "find_files", "grep_files",
             "browser_navigate", "browser_get_content", "browser_screenshot",
+            "expose_port",
         },
         "technical_writing": {
             "web_search", "read_file", "write_file", "edit_file",
@@ -667,7 +669,7 @@ class ToolStateMachine:
             "browser_navigate", "browser_screenshot", "browser_get_content",
             "browser_click", "browser_input", "browser_scroll",
             "read_file", "write_file", "edit_file",
-            "find_files", "grep_files",
+            "find_files", "grep_files", "expose_port",
         },
         2: {
             "web_search", "wide_research", "spawn_sub_agents",
@@ -676,13 +678,13 @@ class ToolStateMachine:
             "browser_click", "browser_input", "browser_scroll",
             "read_file", "write_file", "edit_file", "append_file",
             "list_files", "data_analysis",
-            "find_files", "grep_files",
+            "find_files", "grep_files", "expose_port",
         },
         3: {
             "web_search",
             "browser_navigate", "browser_get_content",
             "read_file", "write_file", "edit_file", "append_file",
-            "find_files", "grep_files",
+            "find_files", "grep_files", "expose_port",
         },
     }
 
