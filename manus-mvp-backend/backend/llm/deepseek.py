@@ -108,12 +108,21 @@ client = AsyncOpenAI(
 
 
 # ============ Enhanced System Prompt ============
-# Import enhanced system prompt from dedicated module, with fallback
+# Use get_system_prompt() for a fresh date on every LLM call while keeping the
+# prompt body stable for KV-cache reuse.
+_FALLBACK_SYSTEM_PROMPT = "你是 Manus，一个强大的通用 AI Agent 助手。请使用工具完成用户任务。"
+
 try:
-    from llm.system_prompt import ENHANCED_SYSTEM_PROMPT
-    SYSTEM_PROMPT = ENHANCED_SYSTEM_PROMPT
+    from llm.system_prompt import get_system_prompt as _get_system_prompt
 except ImportError:
-    SYSTEM_PROMPT = "你是 Manus，一个强大的通用 AI Agent 助手。请使用工具完成用户任务。"
+    _get_system_prompt = None  # type: ignore[assignment]
+
+
+def _system_prompt() -> str:
+    """Return the system prompt with today's date."""
+    if _get_system_prompt is not None:
+        return _get_system_prompt()
+    return _FALLBACK_SYSTEM_PROMPT
 
 
 # ============ Tool Definitions (OpenAI Function Calling format) ============
@@ -911,7 +920,7 @@ async def chat_completion_stream(
         safe_messages = _sanitize_messages_for_api(messages)
         kwargs = {
             "model": DEEPSEEK_MODEL,
-            "messages": [{"role": "system", "content": SYSTEM_PROMPT}] + safe_messages,
+            "messages": [{"role": "system", "content": _system_prompt()}] + safe_messages,
             "stream": True,
             "temperature": 0.7,
             "max_tokens": DEEPSEEK_MAX_TOKENS,
@@ -1001,7 +1010,7 @@ async def chat_completion(
         safe_messages = _sanitize_messages_for_api(messages)
         kwargs = {
             "model": DEEPSEEK_MODEL,
-            "messages": [{"role": "system", "content": SYSTEM_PROMPT}] + safe_messages,
+            "messages": [{"role": "system", "content": _system_prompt()}] + safe_messages,
             "temperature": 0.7,
             "max_tokens": DEEPSEEK_MAX_TOKENS,
         }

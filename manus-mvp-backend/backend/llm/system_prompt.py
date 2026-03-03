@@ -8,6 +8,7 @@ Key improvements:
 4. Tool selection decision tree
 5. Output format specifications (Markdown, tables, citations)
 6. KV-cache friendly: prompt is stable across turns (no dynamic injection here)
+7. Date-only granularity for LLM provider-side KV-cache stability
 """
 
 import os
@@ -23,6 +24,19 @@ def _read_bool_env(name: str, default: bool) -> bool:
 
 ENABLE_ENHANCED_PROMPT = _read_bool_env("MANUS_ENHANCED_PROMPT", True)
 
+# ---- KV-cache stability ----
+# The static part of the system prompt never changes and can be cached by the
+# LLM provider across requests.  Only the date prefix varies (daily).
+_PROMPT_BODY: str | None = None   # lazily built once
+
+
+def _get_prompt_body() -> str:
+    """Return the static body of the system prompt (built once per process)."""
+    global _PROMPT_BODY
+    if _PROMPT_BODY is None:
+        _PROMPT_BODY = _build_prompt_body()
+    return _PROMPT_BODY
+
 
 def build_system_prompt(
     *,
@@ -30,11 +44,20 @@ def build_system_prompt(
     workspace_path: str = "",
     available_tools: list[str] | None = None,
 ) -> str:
-    """Build a context-aware system prompt modeled after Manus 1.6 Max."""
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    """Build a context-aware system prompt modeled after Manus 1.6 Max.
 
-    prompt = f"""你是 Manus，一个强大的通用 AI Agent 助手，由 Manus 团队创建。你在一台隔离的虚拟计算机沙箱中工作，拥有互联网访问能力，用户可以实时看到你的操作过程。
-当前时间: {now}
+    The date is refreshed on every call (daily granularity) so that cross-day
+    sessions stay accurate, while the rest of the prompt is stable for
+    LLM KV-cache reuse.
+    """
+    today = datetime.now().strftime("%Y-%m-%d")
+    return f"当前日期: {today}\n\n{_get_prompt_body()}"
+
+
+def _build_prompt_body() -> str:
+    """Construct the static (cacheable) portion of the system prompt."""
+
+    prompt = """你是 Manus，一个强大的通用 AI Agent 助手，由 Manus 团队创建。你在一台隔离的虚拟计算机沙箱中工作，拥有互联网访问能力，用户可以实时看到你的操作过程。
 
 <agent_loop>
 你运行在一个迭代式的 Agent Loop 中，通过以下步骤完成任务：
@@ -167,4 +190,25 @@ def build_system_prompt(
     return prompt
 
 
+# Kept for backward compatibility — now delegates to build_system_prompt()
+# which prepends a daily-granularity date to the cached body.
 ENHANCED_SYSTEM_PROMPT = build_system_prompt()
+
+
+def get_system_prompt(
+    *,
+    plan_markdown: str = "",
+    workspace_path: str = "",
+    available_tools: list[str] | None = None,
+) -> str:
+    """Public accessor that always returns a prompt with today's date.
+
+    Callers that hold a long-lived process should use this function instead of
+    the module-level ``ENHANCED_SYSTEM_PROMPT`` constant, so the date stays
+    accurate across midnight boundaries.
+    """
+    return build_system_prompt(
+        plan_markdown=plan_markdown,
+        workspace_path=workspace_path,
+        available_tools=available_tools,
+    )
