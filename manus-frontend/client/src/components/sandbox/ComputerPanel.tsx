@@ -21,12 +21,14 @@ import {
   Hand,
   Loader2,
   ExternalLink,
+  MonitorPlay,
 } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 import TerminalWindow from "./TerminalWindow";
 import EditorWindow from "./EditorWindow";
 import BrowserWindow from "./BrowserWindow";
 import FilesWindow from "./FilesWindow";
+import VncOverlay from "./VncOverlay";
 import type {
   ActiveWindow,
   FileNode,
@@ -112,6 +114,8 @@ interface ComputerPanelProps {
   isAgentWorking?: boolean;
   /** 已暴露的端口列表 */
   exposedPorts?: ExposedPort[];
+  /** 会话 ID，用于 VNC 连接 */
+  conversationId?: string;
 }
 
 const tabs: { id: ActiveWindow; label: string; icon: typeof Terminal }[] = [
@@ -146,8 +150,10 @@ export default function ComputerPanel({
   currentTool,
   isAgentWorking = false,
   exposedPorts = [],
+  conversationId,
 }: ComputerPanelProps) {
   const [isMaximized, setIsMaximized] = useState(false);
+  const [vncOpen, setVncOpen] = useState(false);
   const autoSwitchRef = useRef(true);
 
   // 当工具变化时，自动切换到对应的标签页
@@ -220,6 +226,16 @@ export default function ComputerPanel({
             <span className="inline-flex items-center gap-1">
               <Hand className="w-3 h-3" />
               {manualTakeoverEnabled ? "接管中" : "接管"}
+            </span>
+          </button>
+          <button
+            onClick={() => setVncOpen(true)}
+            className="px-2 py-1 rounded text-[10px] transition-colors bg-muted/40 text-muted-foreground hover:bg-primary/20 hover:text-primary"
+            title="打开 VNC 远程桌面"
+          >
+            <span className="inline-flex items-center gap-1">
+              <MonitorPlay className="w-3 h-3" />
+              VNC
             </span>
           </button>
           <button
@@ -383,6 +399,13 @@ export default function ComputerPanel({
           </motion.div>
         </AnimatePresence>
       </div>
+
+      {/* VNC 远程桌面覆盖层 */}
+      <VncOverlay
+        conversationId={conversationId}
+        open={vncOpen}
+        onClose={() => setVncOpen(false)}
+      />
     </motion.div>
   );
 }

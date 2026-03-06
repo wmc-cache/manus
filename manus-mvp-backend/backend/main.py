@@ -79,11 +79,13 @@ from routers.chat import router as chat_router
 from routers.sandbox import router as sandbox_router
 from routers.websocket import router as ws_router
 from routers.proxy import router as proxy_router
+from routers.vnc import router as vnc_router
 
 app.include_router(chat_router)
 app.include_router(sandbox_router)
 app.include_router(ws_router)
 app.include_router(proxy_router)
+app.include_router(vnc_router)
 
 # ---------------------------------------------------------------------------
 # 监控 API（可选）

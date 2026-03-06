@@ -390,8 +390,8 @@ class DockerSandboxManager:
             "--label", f"manus.conversation_id={conversation_id}",
         ])
 
-        # 镜像和命令
-        cmd.extend([SANDBOX_IMAGE, "sleep", "infinity"])
+        # 镜像：保留镜像默认 CMD，确保桌面环境与 x11vnc 正常启动
+        cmd.append(SANDBOX_IMAGE)
 
         try:
             proc = await asyncio.create_subprocess_exec(

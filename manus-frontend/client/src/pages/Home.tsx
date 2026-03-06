@@ -434,6 +434,7 @@ export default function Home() {
                   currentTool={currentToolCall ? { name: currentToolCall.name, arguments: currentToolCall.arguments } : null}
                   isAgentWorking={isLoading}
                   exposedPorts={sandbox.exposedPorts}
+                  conversationId={conversationId ?? undefined}
                 />
               </div>
 
@@ -760,6 +761,7 @@ export default function Home() {
                 onClose={() => setComputerOpen(false)}
                 currentTool={currentToolCall ? { name: currentToolCall.name, arguments: currentToolCall.arguments } : null}
                 isAgentWorking={isLoading}
+                conversationId={conversationId ?? undefined}
               />
             </motion.div>
           )}

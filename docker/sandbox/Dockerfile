@@ -52,6 +52,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     locales \
     && rm -rf /var/lib/apt/lists/*
 
+# ---- 1b. Desktop 环境 (Xvfb + VNC + 窗口管理器) ----
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    xvfb x11vnc openbox xdotool xterm \
+    fonts-wqy-zenhei fonts-noto-color-emoji \
+    chromium-browser \
+    && rm -rf /var/lib/apt/lists/*
+
 # ---- 2. Node.js 22.x ----
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
@@ -101,5 +108,11 @@ RUN echo 'export PS1="\[\033[01;32m\]sandbox\[\033[00m\]:\[\033[01;34m\]\w\[\033
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD test -d /tmp/workspace || exit 1
 
-# 默认命令：保持容器运行
-CMD ["sleep", "infinity"]
+# ---- 桌面启动脚本 ----
+COPY start-desktop.sh /usr/local/bin/start-desktop.sh
+RUN chmod +x /usr/local/bin/start-desktop.sh
+
+EXPOSE 5900
+
+# 默认命令：启动桌面环境 (Xvfb + VNC + WM)
+CMD ["/usr/local/bin/start-desktop.sh"]
