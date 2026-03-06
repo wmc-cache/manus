@@ -9,7 +9,7 @@
  */
 import { useRef, useEffect, useState, useCallback } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { PanelLeftClose, PanelLeft, Monitor, Maximize2 } from "lucide-react";
+import { PanelLeftClose, PanelLeft, Monitor, Maximize2, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useAgent } from "@/hooks/useAgent";
@@ -121,6 +121,7 @@ export default function Home() {
 
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [computerOpen, setComputerOpen] = useState(false);
+  const [planExpanded, setPlanExpanded] = useState(false);
   const [deepResearchSettings, setDeepResearchSettings] = useState<DeepResearchSettingsData>(DEFAULT_DEEP_RESEARCH_SETTINGS);
   const [subAgentDialogOpen, setSubAgentDialogOpen] = useState(false);
   const [subAgentSessionLoading, setSubAgentSessionLoading] = useState(false);
@@ -459,47 +460,6 @@ export default function Home() {
               <EmptyState onSuggestionClick={handleSuggestionClick} />
             ) : (
               <div className="max-w-3xl mx-auto px-4 py-6">
-                {plan && (
-                  <div className="mx-4 mb-3 rounded-xl border border-border/30 bg-background/40 p-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="text-xs text-muted-foreground">执行计划</p>
-                      <div className="flex items-center gap-2 text-[11px] text-muted-foreground/80">
-                        {planSource && (
-                          <span>{PLAN_SOURCE_LABEL[planSource] || planSource}</span>
-                        )}
-                        {planReason && (
-                          <span>{PLAN_REASON_LABEL[planReason] || planReason}</span>
-                        )}
-                      </div>
-                    </div>
-                    <p className="mt-1 text-sm text-foreground/95">{plan.goal || "当前任务"}</p>
-                    <div className="mt-2 space-y-1">
-                      {plan.phases.map((phase) => {
-                        const status = PLAN_STATUS_LABEL[phase.status] || phase.status;
-                        const isRunning = phase.status === "running";
-                        return (
-                          <div
-                            key={phase.id}
-                            className={`flex items-center justify-between rounded-md border px-2 py-1 text-xs ${
-                              isRunning
-                                ? "border-primary/40 bg-primary/10 text-primary"
-                                : "border-border/30 bg-background/30 text-muted-foreground"
-                            }`}
-                          >
-                            <span>{phase.id}. {phase.title}</span>
-                            <span>{status}</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                    {todoPath && (
-                      <p className="mt-2 text-[11px] text-muted-foreground/80 font-mono break-all">
-                        {todoPath}
-                      </p>
-                    )}
-                  </div>
-                )}
-
                 {subAgentIndex && subAgentIndex.sub_sessions.length > 0 && (
                   <div className="mx-4 mb-3 rounded-xl border border-border/30 bg-background/40 p-3">
                     <div className="flex items-center justify-between gap-2">
@@ -598,6 +558,52 @@ export default function Home() {
             <div className="mx-auto w-full max-w-3xl px-4">
               <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
                 当前为手动接管模式，Agent 自动工具调用会暂停。完成后请在计算机窗口点击“接管中”释放接管，再继续让 Agent 执行。
+              </div>
+            </div>
+          )}
+          {plan && (
+            <div className="mx-auto w-full max-w-3xl px-4 pb-2">
+              <div className="rounded-xl border border-border/30 bg-background/60 backdrop-blur">
+                {/* 折叠头：点击切换展开 */}
+                <button
+                  type="button"
+                  className="flex w-full items-center justify-between px-3 py-2 text-sm"
+                  onClick={() => setPlanExpanded((v) => !v)}
+                >
+                  <span className="text-foreground/90 truncate">
+                    {plan.phases.find((p) => p.status === "running")?.title || plan.goal || "执行计划"}
+                  </span>
+                  <span className="ml-2 flex items-center gap-1 text-xs text-muted-foreground">
+                    {plan.phases.filter((p) => p.status === "completed").length}/{plan.phases.length}
+                    <ChevronUp className={`h-4 w-4 transition-transform ${planExpanded ? "" : "rotate-180"}`} />
+                  </span>
+                </button>
+                {/* 展开详情 */}
+                <AnimatePresence>
+                  {planExpanded && (
+                    <motion.div
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: "auto", opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      className="overflow-hidden"
+                    >
+                      <div className="space-y-1 px-3 pb-3">
+                        {plan.phases.map((phase) => (
+                          <div key={phase.id} className={`flex items-center justify-between rounded-md border px-2 py-1 text-xs ${
+                            phase.status === "running"
+                              ? "border-primary/40 bg-primary/10 text-primary"
+                              : phase.status === "completed"
+                                ? "border-green-500/30 bg-green-500/10 text-green-400"
+                                : "border-border/30 bg-background/30 text-muted-foreground"
+                          }`}>
+                            <span>{phase.id}. {phase.title}</span>
+                            <span>{PLAN_STATUS_LABEL[phase.status] || phase.status}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </div>
             </div>
           )}
