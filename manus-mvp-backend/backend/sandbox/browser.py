@@ -1,10 +1,27 @@
 """浏览器服务 - Playwright 控制和截图（支持会话隔离）"""
 import asyncio
 import base64
+import logging
+import shlex
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Any
 
 from sandbox.event_bus import event_bus, SandboxEvent
+from sandbox.docker_sandbox import sandbox_manager
+
+logger = logging.getLogger("sandbox.browser")
+
+_ENSURE_DESKTOP_COMMAND = (
+    "pgrep -f 'x11vnc .*5900' >/dev/null && exit 0; "
+    "if [ -x /usr/local/bin/start-desktop.sh ]; then "
+    "  nohup /usr/local/bin/start-desktop.sh >/tmp/manus-desktop.log 2>&1 & "
+    "else "
+    "  export DISPLAY=:99; "
+    "  pgrep -f 'Xvfb :99' >/dev/null || nohup Xvfb :99 -screen 0 1280x800x24 -ac +extension GLX +render -noreset >/tmp/xvfb.log 2>&1 & "
+    "  sleep 1; "
+    "  pgrep -x x11vnc >/dev/null || nohup x11vnc -display :99 -forever -nopw -shared -rfbport 5900 -xkb >/tmp/x11vnc.log 2>&1 & "
+    "fi"
+)
 
 
 @dataclass
@@ -82,6 +99,56 @@ class BrowserService:
         screenshot_bytes = await session.page.screenshot(type="jpeg", quality=70)
         return base64.b64encode(screenshot_bytes).decode("utf-8")
 
+    async def _sync_url_to_desktop_browser(
+        self,
+        url: str,
+        conversation_id: Optional[str] = None,
+    ) -> None:
+        """将当前 URL 同步到沙箱容器内的可视浏览器，供 VNC 预览显示。"""
+        if not url:
+            return
+
+        sandbox = await sandbox_manager.get_or_create(conversation_id)
+        code, _, stderr = await sandbox_manager.exec_command(
+            _ENSURE_DESKTOP_COMMAND,
+            conversation_id=conversation_id,
+            timeout=10,
+        )
+        if code != 0:
+            logger.warning("启动桌面环境失败 [%s]: %s", sandbox.container_name, stderr.strip())
+            return
+
+        quoted_url = shlex.quote(url)
+        open_command = f"""
+DISPLAY_VALUE="$(ps -ef | sed -n 's/.*x11vnc .* -display \\(:[0-9][0-9]*\\).*/\\1/p' | head -n 1)"
+if [ -z "$DISPLAY_VALUE" ]; then
+  if command -v xdpyinfo >/dev/null 2>&1 && DISPLAY=:1 xdpyinfo >/dev/null 2>&1; then
+    DISPLAY_VALUE=:1
+  else
+    DISPLAY_VALUE=:99
+  fi
+fi
+export DISPLAY="$DISPLAY_VALUE"
+URL={quoted_url}
+if command -v chromium-browser >/dev/null 2>&1; then
+  BROWSER_BIN=chromium-browser
+elif command -v chromium >/dev/null 2>&1; then
+  BROWSER_BIN=chromium
+else
+  echo "Chromium not found" >&2
+  exit 127
+fi
+pkill -x chromium >/dev/null 2>&1 || true
+nohup "$BROWSER_BIN" --no-sandbox --disable-gpu --disable-dev-shm-usage --window-size=1280,800 --start-maximized "$URL" >/tmp/manus-chromium.log 2>&1 < /dev/null &
+"""
+        code, _, stderr = await sandbox_manager.exec_command(
+            open_command,
+            conversation_id=conversation_id,
+            timeout=10,
+        )
+        if code != 0:
+            logger.warning("同步桌面浏览器 URL 失败 [%s]: %s", sandbox.container_name, stderr.strip())
+
     async def navigate(self, url: str, conversation_id: Optional[str] = None) -> Dict[str, Any]:
         """导航到指定 URL"""
         session = await self._ensure_session(conversation_id)
@@ -100,6 +167,7 @@ class BrowserService:
                 self._current_url = session.current_url
                 title = await session.page.title()
                 screenshot_b64 = await self._take_screenshot(session)
+                await self._sync_url_to_desktop_browser(session.current_url, conversation_id)
 
                 await event_bus.publish(SandboxEvent(
                     "browser_navigated",
