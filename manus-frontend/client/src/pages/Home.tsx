@@ -37,7 +37,6 @@ const PLAN_REASON_LABEL: Record<string, string> = {
   phase_advanced: "推进下一阶段",
   finalizing: "进入总结阶段",
   completed: "任务完成",
-  paused_manual_takeover: "手动接管暂停",
   failed_invalid_args: "参数错误中断",
   finalizing_tool_loop: "循环后总结",
   completed_tool_loop: "循环后完成",
@@ -291,7 +290,6 @@ export default function Home() {
   }, [conversationId, loadSubAgentSession]);
 
   const hasMessages = messages.length > 0;
-  const manualTakeoverActive = sandbox.manualTakeoverEnabled;
   const handleOpenComputerPanel = useCallback(() => {
     if (previewDragBlockedRef.current) return;
     setComputerOpen(true);
@@ -362,15 +360,9 @@ export default function Home() {
 
               {hasMessages && (
                 <div className="flex items-center gap-2">
-                  <div
-                    className={`w-2 h-2 rounded-full animate-pulse ${
-                      manualTakeoverActive ? "bg-amber-400" : "bg-emerald-400"
-                    }`}
-                  />
+                  <div className="w-2 h-2 rounded-full animate-pulse bg-emerald-400" />
                   <span className="text-sm text-muted-foreground">
-                    {manualTakeoverActive
-                      ? "手动接管中"
-                      : (isLoading ? "Agent 工作中..." : "就绪")}
+                    {isLoading ? "Agent 工作中..." : "就绪"}
                   </span>
                 </div>
               )}
@@ -422,9 +414,6 @@ export default function Home() {
                   onRefreshFiles={sandbox.fetchFileTree}
                   onDownloadAllFiles={sandbox.downloadAllFiles}
                   downloadingAllFiles={sandbox.downloadingAllFiles}
-                  manualTakeoverEnabled={sandbox.manualTakeoverEnabled}
-                  manualTakeoverTarget={sandbox.manualTakeoverTarget}
-                  onToggleManualTakeover={sandbox.setManualTakeover}
                   onBrowserClick={sandbox.browserClick}
                   onBrowserType={sandbox.browserType}
                   onBrowserNavigate={sandbox.browserNavigate}
@@ -538,15 +527,9 @@ export default function Home() {
                 )}
 
                 {limitReached && continueMessage && (
-                  <div className="mx-4 my-2 p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-sm text-amber-300">
-                    {continueMessage}
-                  </div>
-                )}
-
-                {sandbox.manualBlockedReason && (
-                  <div className="mx-4 my-2 p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-sm text-amber-200">
-                    {sandbox.manualBlockedReason}
-                  </div>
+                <div className="mx-4 my-2 p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-sm text-amber-300">
+                  {continueMessage}
+                </div>
                 )}
 
                 <div ref={messagesEndRef} />
@@ -555,13 +538,6 @@ export default function Home() {
           </div>
 
           {/* 输入区域 */}
-          {manualTakeoverActive && (
-            <div className="mx-auto w-full max-w-3xl px-4">
-              <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
-                当前为手动接管模式，Agent 自动工具调用会暂停。完成后请在计算机窗口点击“接管中”释放接管，再继续让 Agent 执行。
-              </div>
-            </div>
-          )}
           {plan && (
             <div className="mx-auto w-full max-w-3xl px-4 pb-2">
               <div className="rounded-xl border border-border/30 bg-background/60 backdrop-blur">
@@ -749,9 +725,6 @@ export default function Home() {
                 onRefreshFiles={sandbox.fetchFileTree}
                 onDownloadAllFiles={sandbox.downloadAllFiles}
                 downloadingAllFiles={sandbox.downloadingAllFiles}
-                manualTakeoverEnabled={sandbox.manualTakeoverEnabled}
-                manualTakeoverTarget={sandbox.manualTakeoverTarget}
-                onToggleManualTakeover={sandbox.setManualTakeover}
                 onBrowserClick={sandbox.browserClick}
                 onBrowserType={sandbox.browserType}
                 onBrowserNavigate={sandbox.browserNavigate}

@@ -104,31 +104,10 @@ class AgentEngine:
             plan_markdown=plan_markdown,
         )
 
-    @staticmethod
-    def _is_tool_blocked_by_takeover(tool_name: str, target: str) -> bool:
-        normalized = (target or "all").strip().lower()
-        if normalized == "all":
-            return True
-        if normalized == "terminal":
-            return tool_name in {"shell_exec", "execute_code"}
-        if normalized == "browser":
-            return tool_name.startswith("browser_")
-        return True
-
     def _get_allowed_tools(self, conversation: Conversation, *, deep_research_enabled: bool = False) -> List[str]:
         allowed = list(settings.agent.default_tool_names)
         if not deep_research_enabled:
             allowed = [t for t in allowed if t != "spawn_sub_agents"]
-        if conversation.manual_takeover_enabled:
-            target = (conversation.manual_takeover_target or "all").strip().lower()
-            if target == "all":
-                return []
-            if target == "terminal":
-                allowed = [t for t in allowed if t not in {"shell_exec", "execute_code"}]
-            elif target == "browser":
-                allowed = [t for t in allowed if not t.startswith("browser_")]
-            else:
-                return []
         return self._tool_state_machine.get_allowed_tools(conversation, allowed)
 
     @staticmethod
@@ -314,11 +293,9 @@ class AgentEngine:
         completed = False
         limit_notice = ""
         stop_due_invalid_args = False
-        stop_due_manual_takeover = False
         invalid_args_fail_count = 0
         last_invalid_tool_name = ""
         last_invalid_reason = ""
-        manual_blocked_notice = ""
         stop_due_tool_loop = False
         tool_loop_notice = ""
         recent_tool_signatures: List[str] = []
@@ -631,28 +608,6 @@ class AgentEngine:
                     result = "工具调用被跳过：当前轮次已执行了一个有副作用的工具，请在下一轮继续。"
                     tc.result = result
                     tc.status = ToolCallStatus.FAILED
-                elif (
-                    conversation.manual_takeover_enabled
-                    and self._is_tool_blocked_by_takeover(tc.name, conversation.manual_takeover_target)
-                ):
-                    reason = (
-                        f"当前处于手动接管模式（{conversation.manual_takeover_target}），"
-                        "已暂停 Agent 自动工具调用。"
-                    )
-                    result = f"工具执行已阻断: {reason}"
-                    tc.result = result
-                    tc.status = ToolCallStatus.FAILED
-                    stop_due_manual_takeover = True
-                    manual_blocked_notice = (
-                        "当前是手动接管模式，我已暂停自动执行。"
-                        "\n你可以在右侧直接操作计算机；操作完成后点击'释放接管'再让我继续。"
-                    )
-                    await event_bus.publish(SandboxEvent(
-                        "manual_blocked_tool_call",
-                        {"tool_name": tc.name, "reason": reason},
-                        window_id="computer_control",
-                        conversation_id=conversation.id,
-                    ))
                 else:
                     parse_error = tool_call_parse_errors.get(tc.id)
                     if parse_error:
@@ -731,8 +686,6 @@ class AgentEngine:
                 conversation.messages.append(tool_msg)
                 self._save_conversations()
 
-                if stop_due_manual_takeover:
-                    break
                 if stop_due_tool_loop:
                     break
                 if invalid_args_fail_count >= 2:
@@ -740,26 +693,6 @@ class AgentEngine:
                     break
 
             # 处理各种停止条件
-            if stop_due_manual_takeover:
-                conversation.messages.append(Message(role=MessageRole.ASSISTANT, content=manual_blocked_notice))
-                conversation.limit_reached = False
-                conversation.continue_message = None
-                self._save_conversations()
-                yield {
-                    "event": SSEEventType.CONTENT,
-                    "data": json.dumps({"content": manual_blocked_notice, "type": "final_answer"}, ensure_ascii=False)
-                }
-                if conversation.plan:
-                    yield {
-                        "event": SSEEventType.PLAN_UPDATE,
-                        "data": json.dumps(
-                            self._plan_mgr.build_update_payload(conversation, reason="paused_manual_takeover"),
-                            ensure_ascii=False,
-                        ),
-                    }
-                completed = True
-                break
-
             if stop_due_invalid_args:
                 if last_invalid_reason == "parse_error":
                     invalid_notice = (

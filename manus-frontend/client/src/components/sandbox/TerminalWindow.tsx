@@ -11,13 +11,11 @@ import { useState } from "react";
 interface TerminalWindowProps {
   output: string;
   onInput?: (data: string) => void;
-  manualTakeoverEnabled?: boolean;
 }
 
 export default function TerminalWindow({
   output,
   onInput,
-  manualTakeoverEnabled = false,
 }: TerminalWindowProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -48,7 +46,7 @@ export default function TerminalWindow({
 
   const submitCommand = () => {
     const text = command.trim();
-    if (!manualTakeoverEnabled || !text || !onInput) return;
+    if (!text || !onInput) return;
     onInput(`${text}\n`);
     setCommand("");
   };
@@ -109,13 +107,13 @@ export default function TerminalWindow({
                 submitCommand();
               }
             }}
-            disabled={!manualTakeoverEnabled}
-            placeholder={manualTakeoverEnabled ? "输入命令并回车执行..." : "开启接管后可输入命令"}
+            disabled={!onInput}
+            placeholder="输入命令并回车执行..."
             className="flex-1 bg-transparent text-xs text-foreground font-mono outline-none placeholder:text-muted-foreground/50 disabled:opacity-60"
           />
           <button
             onClick={submitCommand}
-            disabled={!manualTakeoverEnabled || !command.trim()}
+            disabled={!onInput || !command.trim()}
             className="text-[10px] px-2 py-1 rounded bg-primary/20 text-primary disabled:opacity-30"
           >
             发送

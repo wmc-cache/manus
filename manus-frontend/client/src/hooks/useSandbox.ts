@@ -89,7 +89,6 @@ export interface ExposedPort {
 }
 
 export type ActiveWindow = "terminal" | "editor" | "browser";
-export type ManualTakeoverTarget = "all" | "terminal" | "browser";
 
 export function useSandbox() {
   const [connected, setConnected] = useState(false);
@@ -99,9 +98,6 @@ export function useSandbox() {
   const [editorFile, setEditorFile] = useState<FileContent | null>(null);
   const [fileTree, setFileTree] = useState<FileNode[]>([]);
   const [events, setEvents] = useState<SandboxEvent[]>([]);
-  const [manualTakeoverEnabled, setManualTakeoverEnabled] = useState(false);
-  const [manualTakeoverTarget, setManualTakeoverTarget] = useState<ManualTakeoverTarget>("all");
-  const [manualBlockedReason, setManualBlockedReason] = useState<string | null>(null);
   const [browserInteractionError, setBrowserInteractionError] = useState<string | null>(null);
   const [downloadingAllFiles, setDownloadingAllFiles] = useState(false);
   const [exposedPorts, setExposedPorts] = useState<ExposedPort[]>([]);
@@ -163,9 +159,6 @@ export function useSandbox() {
     setFileTree([]);
     setEvents([]);
     setActiveWindow("terminal");
-    setManualTakeoverEnabled(false);
-    setManualTakeoverTarget("all");
-    setManualBlockedReason(null);
     setBrowserInteractionError(null);
 
     // 通知后端 WebSocket 切换订阅
@@ -261,25 +254,6 @@ export function useSandbox() {
               setActiveWindow("browser");
               break;
 
-            case "manual_takeover_changed":
-            {
-                const rawTarget = (data.data.target as string) || "all";
-                const target: ManualTakeoverTarget =
-                  rawTarget === "browser" || rawTarget === "terminal" || rawTarget === "all"
-                    ? rawTarget
-                    : "all";
-                setManualTakeoverEnabled(Boolean(data.data.enabled));
-                setManualTakeoverTarget(target);
-                if (!data.data.enabled) {
-                  setManualBlockedReason(null);
-                }
-            }
-              break;
-
-            case "manual_blocked_tool_call":
-              setManualBlockedReason((data.data.reason as string) || "已阻断自动工具调用");
-              break;
-
             case "browser_interaction_result":
               if (data.data.ok) {
                 setBrowserInteractionError(null);
@@ -355,22 +329,6 @@ export function useSandbox() {
     }
   }, []);
 
-  const setManualTakeover = useCallback((enabled: boolean, target: ManualTakeoverTarget = "all") => {
-    const convId = currentConvIdRef.current;
-    if (!convId || wsRef.current?.readyState !== WebSocket.OPEN) return;
-
-    setManualTakeoverEnabled(enabled);
-    setManualTakeoverTarget(target);
-    setManualBlockedReason(null);
-
-    wsRef.current.send(JSON.stringify({
-      type: "manual_takeover",
-      enabled,
-      target,
-      conversation_id: convId,
-    }));
-  }, []);
-
   const browserClick = useCallback((x: number, y: number, viewportWidth: number, viewportHeight: number) => {
     const convId = currentConvIdRef.current;
     if (!convId || wsRef.current?.readyState !== WebSocket.OPEN) return;
@@ -402,7 +360,7 @@ export function useSandbox() {
     if (!convId || wsRef.current?.readyState !== WebSocket.OPEN) return;
 
     wsRef.current.send(JSON.stringify({
-      type: "browser_navigate_manual",
+      type: "browser_navigate",
       url,
       conversation_id: convId,
     }));
@@ -522,12 +480,8 @@ export function useSandbox() {
     editorFile,
     fileTree,
     events,
-    manualTakeoverEnabled,
-    manualTakeoverTarget,
-    manualBlockedReason,
     browserInteractionError,
     downloadingAllFiles,
-    setManualTakeover,
     sendTerminalInput,
     browserClick,
     browserType,

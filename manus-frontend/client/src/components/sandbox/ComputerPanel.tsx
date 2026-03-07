@@ -18,7 +18,6 @@ import {
   Maximize2,
   Minimize2,
   X,
-  Hand,
   Loader2,
   ExternalLink,
   MonitorPlay,
@@ -34,7 +33,6 @@ import type {
   FileNode,
   FileContent,
   BrowserData,
-  ManualTakeoverTarget,
   ExposedPort,
 } from "@/hooks/useSandbox";
 
@@ -98,9 +96,6 @@ interface ComputerPanelProps {
   onRefreshFiles?: () => void;
   onDownloadAllFiles?: () => void;
   downloadingAllFiles?: boolean;
-  manualTakeoverEnabled?: boolean;
-  manualTakeoverTarget?: ManualTakeoverTarget;
-  onToggleManualTakeover?: (enabled: boolean, target?: ManualTakeoverTarget) => void;
   onBrowserClick?: (x: number, y: number, viewportWidth: number, viewportHeight: number) => void;
   onBrowserType?: (text: string, submit?: boolean) => void;
   onBrowserNavigate?: (url: string) => void;
@@ -137,9 +132,6 @@ export default function ComputerPanel({
   onRefreshFiles,
   onDownloadAllFiles,
   downloadingAllFiles = false,
-  manualTakeoverEnabled = false,
-  manualTakeoverTarget = "all",
-  onToggleManualTakeover,
   onBrowserClick,
   onBrowserType,
   onBrowserNavigate,
@@ -214,20 +206,6 @@ export default function ComputerPanel({
         </div>
 
         <div className="flex items-center gap-1">
-          <button
-            onClick={() => onToggleManualTakeover?.(!manualTakeoverEnabled, manualTakeoverTarget)}
-            className={`px-2 py-1 rounded text-[10px] transition-colors ${
-              manualTakeoverEnabled
-                ? "bg-emerald-500/20 text-emerald-300"
-                : "bg-muted/40 text-muted-foreground"
-            }`}
-            title={manualTakeoverEnabled ? "释放手动接管" : "开启手动接管"}
-          >
-            <span className="inline-flex items-center gap-1">
-              <Hand className="w-3 h-3" />
-              {manualTakeoverEnabled ? "接管中" : "接管"}
-            </span>
-          </button>
           <button
             onClick={() => setVncOpen(true)}
             className="px-2 py-1 rounded text-[10px] transition-colors bg-muted/40 text-muted-foreground hover:bg-primary/20 hover:text-primary"
@@ -365,7 +343,6 @@ export default function ComputerPanel({
               <TerminalWindow
                 output={terminalOutput}
                 onInput={onTerminalInput}
-                manualTakeoverEnabled={manualTakeoverEnabled}
               />
             )}
             {activeWindow === "editor" && (
@@ -387,7 +364,6 @@ export default function ComputerPanel({
             {activeWindow === "browser" && (
               <BrowserWindow
                 data={browserData}
-                manualTakeoverEnabled={manualTakeoverEnabled}
                 onPageClick={onBrowserClick}
                 onTypeText={onBrowserType}
                 onNavigate={onBrowserNavigate}

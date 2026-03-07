@@ -242,8 +242,6 @@ async def list_conversations():
             "message_count": len(conv.messages),
             "created_at": conv.created_at.isoformat(),
             "plan_source": conv.plan_source,
-            "manual_takeover_enabled": conv.manual_takeover_enabled,
-            "manual_takeover_target": conv.manual_takeover_target,
             "limit_reached": conv.limit_reached,
             "continue_message": conv.continue_message,
             "awaiting_resume": conv.awaiting_resume,
@@ -321,8 +319,6 @@ async def get_conversation(conversation_id: str):
         "plan_source": conv.plan_source,
         "sub_agent_index": _load_sub_agent_index(conv.id),
         "created_at": conv.created_at.isoformat(),
-        "manual_takeover_enabled": conv.manual_takeover_enabled,
-        "manual_takeover_target": conv.manual_takeover_target,
     }
 
 

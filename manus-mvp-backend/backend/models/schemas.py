@@ -83,8 +83,6 @@ class Conversation(BaseModel):
     messages: List[Message] = Field(default_factory=list)
     plan: Optional[TaskPlan] = None
     plan_source: str = "template"
-    manual_takeover_enabled: bool = False
-    manual_takeover_target: str = "all"
     limit_reached: bool = False
     continue_message: Optional[str] = None
     awaiting_resume: bool = False

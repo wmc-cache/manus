@@ -14,7 +14,6 @@ interface BrowserWindowProps {
     screenshot: string; // base64
     status?: number;
   } | null;
-  manualTakeoverEnabled?: boolean;
   onPageClick?: (x: number, y: number, viewportWidth: number, viewportHeight: number) => void;
   onTypeText?: (text: string, submit?: boolean) => void;
   onNavigate?: (url: string) => void;
@@ -25,7 +24,6 @@ interface BrowserWindowProps {
 
 export default function BrowserWindow({
   data,
-  manualTakeoverEnabled = false,
   onPageClick,
   onTypeText,
   onNavigate,
@@ -132,18 +130,8 @@ export default function BrowserWindow({
         )}
       </div>
 
-      {/* 手动操控栏 */}
-      <div className="flex items-center gap-2 px-3 py-1.5 bg-[oklch(0.12_0.012_260)] border-b border-border/20">
-        <div
-          className={`text-[10px] px-1.5 py-0.5 rounded ${
-            manualTakeoverEnabled
-              ? "bg-emerald-500/15 text-emerald-400"
-              : "bg-muted/40 text-muted-foreground"
-          }`}
-        >
-          {manualTakeoverEnabled ? "手动接管中" : "只读模式"}
-        </div>
-
+      {/* 交互栏 */}
+      {/* <div className="flex items-center gap-2 px-3 py-1.5 bg-[oklch(0.12_0.012_260)] border-b border-border/20">
         <input
           value={typingText}
           onChange={(e) => setTypingText(e.target.value)}
@@ -153,18 +141,14 @@ export default function BrowserWindow({
               handlePrimaryAction();
             }
           }}
-          disabled={!manualTakeoverEnabled}
-          placeholder={
-            manualTakeoverEnabled
-              ? "输入 URL 访问，或先点页面元素后输入文本"
-              : "开启接管后可输入"
-          }
+          disabled={!onNavigate && !onTypeText}
+          placeholder="输入 URL 访问，或先点页面元素后输入文本"
           className="flex-1 h-7 rounded px-2 text-xs bg-[oklch(0.16_0.014_260)] border border-border/20 outline-none disabled:opacity-60"
         />
 
         <button
           onClick={handlePrimaryAction}
-          disabled={!manualTakeoverEnabled || !hasInput}
+          disabled={!hasInput || (!onNavigate && !onTypeText)}
           title={primaryButtonTitle}
           className="h-7 px-2 text-[10px] rounded bg-primary/20 text-primary disabled:opacity-40"
         >
@@ -172,24 +156,18 @@ export default function BrowserWindow({
         </button>
         <button
           onClick={() => onPressKey?.("Enter")}
-          disabled={!manualTakeoverEnabled}
+          disabled={!onPressKey}
           className="h-7 px-2 text-[10px] rounded bg-primary/20 text-primary disabled:opacity-40"
         >
           Enter
         </button>
-      </div>
-
-      {manualTakeoverEnabled && (
-        <div className="px-3 py-1 text-[10px] text-muted-foreground/80 bg-[oklch(0.11_0.012_260)] border-b border-border/10">
-          先点击页面输入框再“输入”文本；输入 URL（如 example.com）会直接访问。
-        </div>
-      )}
+      </div> */}
 
       {/* 页面截图 */}
       <div
         className="flex-1 overflow-auto bg-white"
         onWheel={(e) => {
-          if (!manualTakeoverEnabled || !onScrollPage) return;
+          if (!onScrollPage) return;
           e.preventDefault();
           onScrollPage(e.deltaY);
         }}
@@ -199,11 +177,9 @@ export default function BrowserWindow({
             ref={screenshotRef}
             src={`data:image/jpeg;base64,${data.screenshot}`}
             alt={data.title}
-            className={`w-full h-auto ${
-              manualTakeoverEnabled ? "cursor-crosshair" : "cursor-default"
-            }`}
+            className={`w-full h-auto ${onPageClick ? "cursor-crosshair" : "cursor-default"}`}
             onClick={(e) => {
-              if (!manualTakeoverEnabled || !onPageClick || !screenshotRef.current) return;
+              if (!onPageClick || !screenshotRef.current) return;
               const rect = screenshotRef.current.getBoundingClientRect();
               const x = e.clientX - rect.left;
               const y = e.clientY - rect.top;
