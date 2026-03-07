@@ -1,17 +1,14 @@
 """
-Enhanced Parallel Processing Module — v2.
-
-Key improvements over v1:
-1. Independent context isolation per sub-agent (no shared state leakage)
-2. Automatic retry with exponential backoff for failed sub-agents
-3. Real-time progress tracking with SSE events
-4. Structured error recovery and partial result aggregation
-5. Resource-aware concurrency control
-6. Sub-agent timeout protection
-7. [NEW] Output schema validation for structured results
-8. [NEW] Graceful degradation - partial results are always returned
-9. [NEW] Better progress reporting with ETA estimation
-10. [NEW] Sub-agent workspace isolation (each agent gets its own directory)
+每个子智能体独立的上下文隔离（无共享状态泄漏）
+失败子智能体的指数退避自动重试
+基于 SSE 事件的实时进度追踪
+结构化错误恢复与部分结果聚合
+资源感知的并发控制
+子智能体超时保护
+结构化结果的输出 Schema 校验
+优雅降级 —— 始终返回部分结果
+含预计完成时间（ETA）估算的更优进度上报
+子智能体工作区隔离（每个智能体拥有独立目录）
 """
 import asyncio
 import json

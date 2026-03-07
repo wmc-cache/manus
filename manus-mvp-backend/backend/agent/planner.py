@@ -1,13 +1,13 @@
 """
-Planner Module — Enhanced Edition.
+规划器模块 — 增强版
+主要改进：
 
-Key improvements:
-1. LLM-driven plan generation with capability annotations per phase
-2. Dynamic plan revision based on execution progress and new discoveries
-3. Plan complexity estimation with multi-signal analysis
-4. Phase capability metadata for dynamic tool gating
-5. Plan update vs advance semantics (matching Manus 1.6 Max)
-6. Better prompt engineering for plan generation
+基于 LLM 的计划生成，每阶段附带能力注解
+根据执行进度与新发现动态修订计划
+多信号分析的计划复杂度估算
+用于动态工具门控的阶段能力元数据
+计划更新与推进的语义区分
+优化计划生成的提示词工程
 """
 import json
 import logging

@@ -3,6 +3,7 @@
 import asyncio
 import re
 from datetime import datetime
+from typing import Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -26,7 +27,7 @@ async def websocket_sandbox(websocket: WebSocket):
     queue = event_bus.subscribe()
     subscribed_conv_id = None
 
-    def resolve_conversation_id(data: dict) -> str | None:
+    def resolve_conversation_id(data: dict) -> Optional[str]:
         return (data.get("conversation_id") or subscribed_conv_id) if isinstance(data, dict) else subscribed_conv_id
 
     try:

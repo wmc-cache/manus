@@ -1,18 +1,18 @@
 """
-Enhanced System Prompt
-
-Key improvements:
-1. Structured agent loop instructions with XML-style sections
-2. Error handling and recovery guidelines with 3-strike rule
-3. Context-aware file operations with checkpoint strategy
-4. Tool selection decision tree
-5. Output format specifications (Markdown, tables, citations)
-6. KV-cache friendly: prompt is stable across turns (no dynamic injection here)
-7. Date-only granularity for LLM provider-side KV-cache stability
+增强型系统提示词
+主要改进：
+使用 XML 风格分节的结构化智能体循环指令
+含"三次失败"规则的错误处理与恢复指南
+带检查点策略的上下文感知文件操作
+工具选择决策树
+输出格式规范（Markdown、表格、引用）
+KV 缓存友好：提示词在多轮对话中保持稳定（此处无动态注入）
+日期精度仅到天级，以保证 LLM 服务端 KV 缓存的稳定性
 """
 
 import os
 from datetime import datetime
+from typing import Optional
 
 
 def _read_bool_env(name: str, default: bool) -> bool:
@@ -24,10 +24,8 @@ def _read_bool_env(name: str, default: bool) -> bool:
 
 ENABLE_ENHANCED_PROMPT = _read_bool_env("MANUS_ENHANCED_PROMPT", True)
 
-# ---- KV-cache stability ----
-# The static part of the system prompt never changes and can be cached by the
-# LLM provider across requests.  Only the date prefix varies (daily).
-_PROMPT_BODY: str | None = None   # lazily built once
+
+_PROMPT_BODY: Optional[str] = None
 
 
 def _get_prompt_body() -> str:
@@ -42,7 +40,7 @@ def build_system_prompt(
     *,
     plan_markdown: str = "",
     workspace_path: str = "",
-    available_tools: list[str] | None = None,
+    available_tools: Optional[list[str]] = None,
 ) -> str:
     """Build a context-aware system prompt modeled after Manus 1.6 Max.
 
@@ -190,8 +188,7 @@ def _build_prompt_body() -> str:
     return prompt
 
 
-# Kept for backward compatibility — now delegates to build_system_prompt()
-# which prepends a daily-granularity date to the cached body.
+
 ENHANCED_SYSTEM_PROMPT = build_system_prompt()
 
 
@@ -199,7 +196,7 @@ def get_system_prompt(
     *,
     plan_markdown: str = "",
     workspace_path: str = "",
-    available_tools: list[str] | None = None,
+    available_tools: Optional[list[str]] = None,
 ) -> str:
     """Public accessor that always returns a prompt with today's date.
 

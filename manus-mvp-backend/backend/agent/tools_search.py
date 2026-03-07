@@ -1,16 +1,10 @@
 """
-File Search Tools Module - find_files (glob) and grep_files (regex search).
-
-Inspired by Manus 1.6 Max's `match` tool with `glob` and `grep` actions.
-These tools enable the agent to efficiently locate files and search content
-without needing to manually traverse directories.
+文件搜索工具模块 —— 提供 find_files（glob 匹配）与 grep_files（正则搜索）两项功能。
 """
-import asyncio
-import fnmatch
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 from sandbox.filesystem import get_workspace_root
 

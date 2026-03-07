@@ -1,15 +1,13 @@
 """
-Context Engineering for Agent Loop — Enhanced Edition.
-
-Key improvements over original:
-1. KV-cache friendly compression: only append/trim at tail, never mutate prefix
-2. Error memory retention: failed tool calls are preserved with higher priority
-3. Enhanced todo.md attention manipulation: structured injection at optimal position
-4. Recoverable compression with file-backed externalization
-5. Token-aware budgeting with configurable limits
-6. Dynamic tool gating based on plan phase capabilities (not just hardcoded phase IDs)
-7. Reasoning effort injection for adaptive thinking depth
-8. Compacted history markers for compressed old messages
+智能体循环的上下文工程 
+KV 缓存友好的压缩策略：仅在尾部追加/裁剪，前缀前缀永不修改
+错误记忆保留：失败的工具调用以更高优先级保存
+增强的 todo.md 注意力操控：在最优位置进行结构化注入
+可恢复压缩，支持文件落盘外化存储
+可配置上限的 Token 感知预算管理
+基于计划阶段能力的动态工具门控（而非硬编码阶段 ID）
+推理强度注入，实现自适应思考深度
+已压缩旧消息的紧凑历史标记
 """
 import json
 import logging
