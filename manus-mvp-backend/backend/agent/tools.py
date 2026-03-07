@@ -1,4 +1,5 @@
 """Agent 工具系统 - 定义和执行各种工具，联动计算机窗口（支持会话隔离）"""
+import inspect
 import json
 import os
 import sys
@@ -96,6 +97,30 @@ def _to_workspace_relpath(path: str, workspace: str) -> str:
     workspace_path = Path(workspace).resolve()
     target_path = Path(path).resolve()
     return os.path.relpath(str(target_path), str(workspace_path))
+
+
+def _inject_conversation_id_if_supported(func: Any, kwargs: Dict[str, Any], conversation_id: Optional[str]) -> Dict[str, Any]:
+    """仅在工具函数支持时注入 conversation_id，避免扩展工具丢失会话工作目录。"""
+    if "conversation_id" in kwargs:
+        return kwargs
+
+    try:
+        signature = inspect.signature(func)
+    except (TypeError, ValueError):
+        return kwargs
+
+    parameters = signature.parameters
+    if "conversation_id" in parameters:
+        updated_kwargs = dict(kwargs)
+        updated_kwargs["conversation_id"] = conversation_id
+        return updated_kwargs
+
+    if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters.values()):
+        updated_kwargs = dict(kwargs)
+        updated_kwargs["conversation_id"] = conversation_id
+        return updated_kwargs
+
+    return kwargs
 
 
 # ============ 工具：网页搜索（Tavily API）============
@@ -1581,6 +1606,7 @@ async def execute_tool(name: str, arguments: Dict[str, Any], conversation_id: Op
             hint = f" {usage_hint}" if usage_hint else ""
             raise ValueError(f"工具 `{name}` 参数类型错误(应为正整数): {', '.join(wrong_int_keys)}。{hint}".strip())
 
+        kwargs = _inject_conversation_id_if_supported(tool["func"], kwargs, conversation_id)
         result = await tool["func"](**kwargs)
         return result
     finally:
