@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 from typing import AsyncGenerator, List, Dict, Any, Optional, Tuple
 
+import httpx
 from openai import AsyncOpenAI
 
 logger = logging.getLogger(__name__)
@@ -63,18 +64,21 @@ def _resolve_multi_key(keys: tuple[str, ...], default: str = "") -> str:
 
 
 def _resolve_deepseek_api_key() -> str:
-    # Claude-compatible env first, then legacy DeepSeek env.
-    return _resolve_multi_key(("CLAUDE_API_KEY", "DEEPSEEK_API_KEY"), default="")
+    # Anthropic-compatible env first, then Claude-compatible env, then legacy DeepSeek env.
+    return _resolve_multi_key(
+        ("ANTHROPIC_AUTH_TOKEN", "CLAUDE_API_KEY", "DEEPSEEK_API_KEY"),
+        default="",
+    )
 
 
 # DeepSeek API 配置
 DEEPSEEK_API_KEY = _resolve_deepseek_api_key()
 DEEPSEEK_BASE_URL = _resolve_multi_key(
-    ("CLAUDE_BASE_URL", "DEEPSEEK_BASE_URL"),
+    ("ANTHROPIC_BASE_URL", "CLAUDE_BASE_URL", "DEEPSEEK_BASE_URL"),
     default="https://api.deepseek.com",
 )
 DEEPSEEK_MODEL = _resolve_multi_key(
-    ("CLAUDE_MODEL", "DEEPSEEK_MODEL"),
+    ("ANTHROPIC_DEFAULT_SONNET_MODEL", "CLAUDE_MODEL", "DEEPSEEK_MODEL"),
     default="deepseek-chat",
 )
 DEEPSEEK_FALLBACK_MODELS = [
@@ -105,6 +109,354 @@ client = AsyncOpenAI(
     base_url=DEEPSEEK_BASE_URL,
     timeout=REQUEST_TIMEOUT,
 )
+
+
+def _uses_anthropic_messages_api() -> bool:
+    base_url = (DEEPSEEK_BASE_URL or "").strip().lower()
+    if not base_url:
+        return False
+    if "/v1/openai" in base_url or "/openai/" in base_url:
+        return False
+    return "anthropic" in base_url
+
+
+def _anthropic_api_base_url() -> str:
+    base_url = (DEEPSEEK_BASE_URL or "").strip().rstrip("/")
+    if base_url.endswith("/v1"):
+        return base_url
+    return f"{base_url}/v1"
+
+
+def _anthropic_headers() -> Dict[str, str]:
+    headers = {
+        "content-type": "application/json",
+        "anthropic-version": os.environ.get("ANTHROPIC_VERSION", "2023-06-01"),
+    }
+    if DEEPSEEK_API_KEY:
+        headers["x-api-key"] = DEEPSEEK_API_KEY
+        headers["Authorization"] = f"Bearer {DEEPSEEK_API_KEY}"
+    return headers
+
+
+def _stringify_content(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
+
+
+def _content_to_text_blocks(content: Any) -> List[Dict[str, str]]:
+    if content is None:
+        return []
+
+    if isinstance(content, str):
+        return [{"type": "text", "text": content}] if content else []
+
+    if isinstance(content, list):
+        blocks: List[Dict[str, str]] = []
+        for item in content:
+            if isinstance(item, str):
+                if item:
+                    blocks.append({"type": "text", "text": item})
+                continue
+            if isinstance(item, dict):
+                item_type = str(item.get("type", "")).strip()
+                if item_type == "text" and isinstance(item.get("text"), str):
+                    text = item.get("text", "")
+                    if text:
+                        blocks.append({"type": "text", "text": text})
+                    continue
+                if isinstance(item.get("text"), str):
+                    text = item.get("text", "")
+                    if text:
+                        blocks.append({"type": "text", "text": text})
+                    continue
+            serialized = _stringify_content(item)
+            if serialized:
+                blocks.append({"type": "text", "text": serialized})
+        return blocks
+
+    serialized = _stringify_content(content)
+    return [{"type": "text", "text": serialized}] if serialized else []
+
+
+def _append_anthropic_message(
+    messages: List[Dict[str, Any]],
+    role: str,
+    blocks: List[Dict[str, Any]],
+) -> None:
+    if not blocks:
+        return
+    if messages and messages[-1].get("role") == role and isinstance(messages[-1].get("content"), list):
+        messages[-1]["content"].extend(blocks)
+        return
+    messages.append({"role": role, "content": blocks})
+
+
+def _convert_tools_to_anthropic(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    anthropic_tools: List[Dict[str, Any]] = []
+    for tool in tools:
+        function_spec = tool.get("function", {})
+        name = str(function_spec.get("name", "")).strip()
+        if not name:
+            continue
+        anthropic_tools.append({
+            "name": name,
+            "description": function_spec.get("description", "") or "",
+            "input_schema": function_spec.get("parameters") or {
+                "type": "object",
+                "properties": {},
+            },
+        })
+    return anthropic_tools
+
+
+def _convert_messages_to_anthropic(messages: List[Dict[str, Any]]) -> Tuple[str, List[Dict[str, Any]]]:
+    system_parts = [_system_prompt()]
+    anthropic_messages: List[Dict[str, Any]] = []
+
+    index = 0
+    while index < len(messages):
+        message = messages[index]
+        role = message.get("role")
+
+        if role == "system":
+            system_text = _stringify_content(message.get("content")).strip()
+            if system_text:
+                system_parts.append(system_text)
+            index += 1
+            continue
+
+        if role == "user":
+            _append_anthropic_message(
+                anthropic_messages,
+                "user",
+                _content_to_text_blocks(message.get("content")),
+            )
+            index += 1
+            continue
+
+        if role == "assistant":
+            blocks = _content_to_text_blocks(message.get("content"))
+            raw_tool_calls = message.get("tool_calls")
+            if isinstance(raw_tool_calls, list):
+                for tool_call in raw_tool_calls:
+                    if not isinstance(tool_call, dict):
+                        continue
+                    tool_call_id = str(tool_call.get("id", "")).strip()
+                    function_spec = tool_call.get("function", {})
+                    if not isinstance(function_spec, dict):
+                        function_spec = {}
+                    name = str(function_spec.get("name", "")).strip()
+                    if not tool_call_id or not name:
+                        continue
+                    arguments, _, _ = _parse_tool_arguments(function_spec.get("arguments"))
+                    blocks.append({
+                        "type": "tool_use",
+                        "id": tool_call_id,
+                        "name": name,
+                        "input": arguments,
+                    })
+            _append_anthropic_message(anthropic_messages, "assistant", blocks)
+            index += 1
+            continue
+
+        if role == "tool":
+            tool_result_blocks: List[Dict[str, Any]] = []
+            while index < len(messages) and messages[index].get("role") == "tool":
+                tool_message = messages[index]
+                tool_call_id = str(tool_message.get("tool_call_id", "")).strip()
+                if tool_call_id:
+                    tool_result_blocks.append({
+                        "type": "tool_result",
+                        "tool_use_id": tool_call_id,
+                        "content": _stringify_content(tool_message.get("content")),
+                    })
+                index += 1
+            _append_anthropic_message(anthropic_messages, "user", tool_result_blocks)
+            continue
+
+        index += 1
+
+    return "\n\n".join(part for part in system_parts if part), anthropic_messages
+
+
+def _parse_anthropic_response(payload: Dict[str, Any]) -> Dict[str, Any]:
+    content_parts: List[str] = []
+    tool_calls: List[Dict[str, Any]] = []
+
+    for block in payload.get("content", []) or []:
+        if not isinstance(block, dict):
+            continue
+        block_type = str(block.get("type", "")).strip()
+        if block_type == "text":
+            text = block.get("text", "")
+            if isinstance(text, str) and text:
+                content_parts.append(text)
+            continue
+        if block_type == "tool_use":
+            tool_calls.append({
+                "id": str(block.get("id", "")).strip(),
+                "name": str(block.get("name", "")).strip(),
+                "arguments": block.get("input") if isinstance(block.get("input"), dict) else {},
+            })
+
+    stop_reason = str(payload.get("stop_reason", "")).strip()
+    finish_reason = ""
+    if stop_reason == "tool_use":
+        finish_reason = "tool_calls"
+    elif stop_reason == "end_turn":
+        finish_reason = "stop"
+    elif stop_reason == "max_tokens":
+        finish_reason = "length"
+    elif stop_reason:
+        finish_reason = stop_reason
+
+    result: Dict[str, Any] = {
+        "content": "".join(content_parts),
+        "tool_calls": tool_calls,
+    }
+    if finish_reason:
+        result["finish_reason"] = finish_reason
+    return result
+
+
+def _track_anthropic_usage(payload: Dict[str, Any]) -> None:
+    global _total_prompt_tokens, _total_completion_tokens
+    usage = payload.get("usage") or {}
+    if not isinstance(usage, dict):
+        return
+    _total_prompt_tokens += int(usage.get("input_tokens") or 0)
+    _total_completion_tokens += int(usage.get("output_tokens") or 0)
+
+
+def _extract_anthropic_error(response: httpx.Response) -> str:
+    try:
+        payload = response.json()
+    except Exception:
+        payload = None
+
+    if isinstance(payload, dict):
+        error_obj = payload.get("error")
+        if isinstance(error_obj, dict):
+            message = _stringify_content(error_obj.get("message")).strip()
+            if message:
+                return f"Error code: {response.status_code} - {message}"
+        message = _stringify_content(payload.get("message")).strip()
+        if message:
+            return f"Error code: {response.status_code} - {message}"
+
+    text = response.text.strip()
+    if text:
+        return f"Error code: {response.status_code} - {text[:300]}"
+    return f"Error code: {response.status_code}"
+
+
+async def _post_anthropic_messages(payload: Dict[str, Any]) -> Dict[str, Any]:
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as http_client:
+        response = await http_client.post(
+            f"{_anthropic_api_base_url()}/messages",
+            headers=_anthropic_headers(),
+            json=payload,
+        )
+    if response.status_code >= 400:
+        raise RuntimeError(_extract_anthropic_error(response))
+    return response.json()
+
+
+async def _create_anthropic_completion_with_retry(
+    payload: Dict[str, Any],
+    max_retries: int = MAX_RETRIES,
+) -> Dict[str, Any]:
+    last_error = None
+
+    requested_model = str(payload.get("model") or DEEPSEEK_MODEL).strip() or DEEPSEEK_MODEL
+    candidate_models = [requested_model]
+    for fallback in DEEPSEEK_FALLBACK_MODELS:
+        if fallback not in candidate_models:
+            candidate_models.append(fallback)
+
+    for model_index, model_name in enumerate(candidate_models):
+        model_payload = dict(payload)
+        model_payload["model"] = model_name
+        retry_budget = max_retries if model_index == 0 else max(1, min(2, max_retries))
+
+        for attempt in range(retry_budget):
+            try:
+                return await _post_anthropic_messages(model_payload)
+            except Exception as e:
+                last_error = e
+                err_text = str(e).lower()
+
+                if (
+                    attempt == 0
+                    and model_payload.get("max_tokens") != DEEPSEEK_MAX_TOKENS_FALLBACK
+                    and "max_tokens" in err_text
+                ):
+                    retry_payload = dict(model_payload)
+                    retry_payload["max_tokens"] = DEEPSEEK_MAX_TOKENS_FALLBACK
+                    try:
+                        return await _post_anthropic_messages(retry_payload)
+                    except Exception as e2:
+                        last_error = e2
+                        if _is_model_not_found(e2):
+                            logger.warning(
+                                "Anthropic model `%s` unavailable after max_tokens fallback, trying next model.",
+                                model_name,
+                            )
+                            break
+                        if not _is_retryable(e2):
+                            raise
+
+                if _is_model_not_found(e):
+                    logger.warning(
+                        "Anthropic model `%s` unavailable, trying fallback model.",
+                        model_name,
+                    )
+                    break
+
+                if _is_retryable(e) and attempt < retry_budget - 1:
+                    delay = 2 ** attempt
+                    logger.warning(
+                        "Anthropic request failed (model=%s attempt %d/%d), retrying in %ds: %s",
+                        model_name,
+                        attempt + 1,
+                        retry_budget,
+                        delay,
+                        str(e)[:200],
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+
+                raise
+
+    raise last_error  # type: ignore[misc]
+
+
+async def _chat_completion_anthropic(
+    messages: List[Dict[str, Any]],
+    use_tools: bool = True,
+    allowed_tool_names: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    safe_messages = _sanitize_messages_for_api(messages)
+    system_prompt, anthropic_messages = _convert_messages_to_anthropic(safe_messages)
+    payload: Dict[str, Any] = {
+        "model": DEEPSEEK_MODEL,
+        "system": system_prompt,
+        "messages": anthropic_messages,
+        "temperature": 0.7,
+        "max_tokens": DEEPSEEK_MAX_TOKENS,
+    }
+    selected_tools = _select_tools(allowed_tool_names)
+    if use_tools and selected_tools:
+        payload["tools"] = _convert_tools_to_anthropic(selected_tools)
+
+    response_payload = await _create_anthropic_completion_with_retry(payload)
+    _track_anthropic_usage(response_payload)
+    return _parse_anthropic_response(response_payload)
 
 
 # ============ Enhanced System Prompt ============
@@ -912,11 +1264,34 @@ async def chat_completion_stream(
     if not DEEPSEEK_API_KEY:
         yield {
             "type": "error",
-            "data": "LLM API Key 未配置，请在环境变量或 .env 中设置 CLAUDE_API_KEY 或 DEEPSEEK_API_KEY 后重启后端。"
+            "data": "LLM API Key 未配置，请在环境变量或 .env 中设置 ANTHROPIC_AUTH_TOKEN、CLAUDE_API_KEY 或 DEEPSEEK_API_KEY 后重启后端。"
         }
         return
 
     try:
+        if _uses_anthropic_messages_api():
+            result = await _chat_completion_anthropic(
+                messages,
+                use_tools=use_tools,
+                allowed_tool_names=allowed_tool_names,
+            )
+            content = result.get("content", "")
+            if isinstance(content, str) and content:
+                yield {"type": "content", "data": content}
+            tool_calls = result.get("tool_calls", [])
+            if isinstance(tool_calls, list):
+                for tool_call in tool_calls:
+                    if isinstance(tool_call, dict):
+                        yield {"type": "tool_call", "data": tool_call}
+            yield {
+                "type": "done",
+                "data": {
+                    "content": content if isinstance(content, str) else "",
+                    "tool_calls": tool_calls if isinstance(tool_calls, list) else [],
+                },
+            }
+            return
+
         safe_messages = _sanitize_messages_for_api(messages)
         kwargs = {
             "model": DEEPSEEK_MODEL,
@@ -1002,11 +1377,18 @@ async def chat_completion(
     """非流式调用 DeepSeek API（带重试）"""
     if not DEEPSEEK_API_KEY:
         return {
-            "content": "调用 LLM 时出错: 未配置 API Key。请在环境变量或 .env 中设置 CLAUDE_API_KEY 或 DEEPSEEK_API_KEY 后重启后端。",
+            "content": "调用 LLM 时出错: 未配置 API Key。请在环境变量或 .env 中设置 ANTHROPIC_AUTH_TOKEN、CLAUDE_API_KEY 或 DEEPSEEK_API_KEY 后重启后端。",
             "tool_calls": []
         }
 
     try:
+        if _uses_anthropic_messages_api():
+            return await _chat_completion_anthropic(
+                messages,
+                use_tools=use_tools,
+                allowed_tool_names=allowed_tool_names,
+            )
+
         safe_messages = _sanitize_messages_for_api(messages)
         kwargs = {
             "model": DEEPSEEK_MODEL,

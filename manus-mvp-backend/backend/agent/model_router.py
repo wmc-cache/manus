@@ -34,6 +34,21 @@ def _read_env_key_from_file(path: Path, key: str) -> str:
         return ""
     return ""
 
+
+def _resolve_multi_key(keys: tuple[str, ...], default: str = "") -> str:
+    for key_name in keys:
+        env_value = os.environ.get(key_name, "").strip()
+        if env_value:
+            return env_value
+
+    backend_env = Path(__file__).resolve().parents[1] / ".env"
+    for key_name in keys:
+        file_value = _read_env_key_from_file(backend_env, key_name)
+        if file_value:
+            return file_value
+
+    return default
+
 logger = logging.getLogger(__name__)
 
 
@@ -78,16 +93,23 @@ class ModelRouter:
     def _load_config(self):
         """Load model configurations from environment."""
         # Primary model (DeepSeek) - also read from .env file
-        deepseek_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
-        if not deepseek_key:
-            deepseek_key = _read_env_key_from_file(
-                Path(__file__).resolve().parents[1] / ".env", "DEEPSEEK_API_KEY"
-            )
+        deepseek_key = _resolve_multi_key(
+            ("ANTHROPIC_AUTH_TOKEN", "CLAUDE_API_KEY", "DEEPSEEK_API_KEY"),
+            default="",
+        )
         if deepseek_key:
+            base_url = _resolve_multi_key(
+                ("ANTHROPIC_BASE_URL", "CLAUDE_BASE_URL", "DEEPSEEK_BASE_URL"),
+                default="https://api.deepseek.com",
+            )
+            model_name = _resolve_multi_key(
+                ("ANTHROPIC_DEFAULT_SONNET_MODEL", "CLAUDE_MODEL", "DEEPSEEK_MODEL"),
+                default="deepseek-chat",
+            )
             self._models["deepseek-chat"] = ModelConfig(
-                name="deepseek-chat",
+                name=model_name,
                 provider="deepseek",
-                base_url=os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+                base_url=base_url,
                 api_key=deepseek_key,
                 max_tokens=int(os.environ.get("DEEPSEEK_MAX_TOKENS", "8192")),
                 max_tokens_fallback=int(os.environ.get("DEEPSEEK_MAX_TOKENS_FALLBACK", "4096")),
@@ -102,7 +124,10 @@ class ModelRouter:
             self._models["deepseek-reasoner"] = ModelConfig(
                 name=deepseek_reasoner,
                 provider="deepseek",
-                base_url=os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+                base_url=_resolve_multi_key(
+                    ("ANTHROPIC_BASE_URL", "CLAUDE_BASE_URL", "DEEPSEEK_BASE_URL"),
+                    default="https://api.deepseek.com",
+                ),
                 api_key=deepseek_key,
                 max_tokens=int(os.environ.get("DEEPSEEK_REASONER_MAX_TOKENS", "4096")),
                 supports_tools=False,  # Reasoner models typically don't support tools
@@ -156,7 +181,7 @@ class ModelRouter:
             )
 
         # Emergency fallback - should not happen in normal operation
-        raise RuntimeError("No models configured. Please set DEEPSEEK_API_KEY.")
+        raise RuntimeError("No models configured. Please set ANTHROPIC_AUTH_TOKEN, CLAUDE_API_KEY, or DEEPSEEK_API_KEY.")
 
     def _get_fallback(self, primary_model: str) -> Optional[ModelConfig]:
         """Get fallback model for a given primary model."""
