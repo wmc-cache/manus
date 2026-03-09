@@ -7,7 +7,7 @@ sleep 0.5
 x11vnc -display :99 -forever -nopw -shared -rfbport 5900 -xkb &
 sleep 0.5
 if [ "${START_CHROME:-true}" = "true" ]; then
-  chromium-browser --no-sandbox --disable-gpu --disable-dev-shm-usage \
+  google-chrome --no-sandbox --disable-gpu --disable-dev-shm-usage \
     --window-size=1280,800 --start-maximized \
     "${CHROME_START_URL:-about:blank}" &
 fi

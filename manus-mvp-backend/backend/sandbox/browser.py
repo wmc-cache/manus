@@ -43,7 +43,9 @@ _DISPLAY_DISCOVERY_SNIPPET = (
 _ENSURE_REMOTE_BROWSER_COMMAND = (
     _DISPLAY_DISCOVERY_SNIPPET
     + "export DISPLAY=\"$DISPLAY_VALUE\"\n"
-    + "if command -v chromium-browser >/dev/null 2>&1; then\n"
+    + "if command -v google-chrome >/dev/null 2>&1; then\n"
+    + "  BROWSER_BIN=google-chrome\n"
+    + "elif command -v chromium-browser >/dev/null 2>&1; then\n"
     + "  BROWSER_BIN=chromium-browser\n"
     + "elif command -v chromium >/dev/null 2>&1; then\n"
     + "  BROWSER_BIN=chromium\n"
