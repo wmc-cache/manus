@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_DIR="$ROOT_DIR/manus-mvp-backend/backend"
 FRONTEND_DIR="$ROOT_DIR/manus-frontend/client"
 VENV_PYTHON="$ROOT_DIR/.venv/bin/python"
+BACKEND_ENV_FILE="$BACKEND_DIR/.env"
 
 RUN_DIR="$ROOT_DIR/.run"
 LOG_DIR="$RUN_DIR/logs"
@@ -19,6 +20,16 @@ mkdir -p "$LOG_DIR"
 is_pid_running() {
   local pid="$1"
   kill -0 "$pid" >/dev/null 2>&1
+}
+
+load_env_file() {
+  local env_file="$1"
+  if [[ -f "$env_file" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "$env_file"
+    set +a
+  fi
 }
 
 stop_port_service() {
@@ -63,6 +74,7 @@ start_backend() {
     cd "$BACKEND_DIR"
     # shellcheck disable=SC1091
     source "$ROOT_DIR/.venv/bin/activate"
+    load_env_file "$BACKEND_ENV_FILE"
     export PYTHONPATH="$BACKEND_DIR"
     nohup uvicorn main:app --host 0.0.0.0 --port "$BACKEND_PORT" >"$LOG_DIR/backend.log" 2>&1 &
     echo "$!" >"$BACKEND_PID_FILE"
