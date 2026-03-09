@@ -7,6 +7,7 @@ import { motion } from "framer-motion";
 import { Send, Square, Sparkles, ImagePlus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
+import { generateUuid } from "@/lib/uuid";
 import type { ChatImagePayload } from "@/types";
 
 const MAX_IMAGE_COUNT = 4;
@@ -128,7 +129,7 @@ export default function ChatInput({
       try {
         const dataUrl = await readFileAsDataUrl(file);
         next.push({
-          id: crypto.randomUUID(),
+          id: generateUuid(),
           name: file.name || "image",
           mime_type: file.type || "application/octet-stream",
           size_bytes: file.size,

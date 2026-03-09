@@ -14,6 +14,7 @@ import type {
   SubAgentIndexData,
   SubAgentSessionDetailData,
 } from "@/types";
+import { generateUuid } from "@/lib/uuid";
 const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
 const API_TOKEN = (import.meta.env.VITE_MANUS_API_TOKEN || "").trim();
 const ACTIVE_CONVERSATION_STORAGE_KEY = "manus.active_conversation_id";
@@ -215,12 +216,12 @@ function normalizeConversations(payload: ConversationListResponse): Conversation
 
 function normalizeMessage(item: ConversationDetailMessage): Message {
   return {
-    id: item?.id || crypto.randomUUID(),
+    id: item?.id || generateUuid(),
     role: item?.role || "assistant",
     content: item?.content || "",
     images: normalizeImages(item?.images),
     toolCalls: (item?.tool_calls || []).map((tc) => ({
-      id: tc.id || crypto.randomUUID(),
+      id: tc.id || generateUuid(),
       name: tc.name || "",
       arguments: tc.arguments || {},
       result: typeof tc.result === "string"
@@ -628,7 +629,7 @@ export function useAgent() {
     if (!silentUserMessage) {
       // 添加用户消息
       const userMessage: Message = {
-        id: crypto.randomUUID(),
+        id: generateUuid(),
         role: "user",
         content: message,
         images: options?.images || [],
@@ -660,7 +661,7 @@ export function useAgent() {
     }
 
     // 准备 assistant 消息占位
-    const assistantMsgId = crypto.randomUUID();
+    const assistantMsgId = generateUuid();
     let assistantContent = "";
     const toolCalls: ToolCall[] = [];
 
