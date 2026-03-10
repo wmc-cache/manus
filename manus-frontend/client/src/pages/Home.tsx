@@ -11,7 +11,8 @@ import { Suspense, lazy, useRef, useEffect, useState, useCallback } from "react"
 import { AnimatePresence, motion } from "framer-motion";
 import { PanelLeftClose, PanelLeft, Monitor, Maximize2, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Loader2, Trash2, AlertTriangle } from "lucide-react";
 import { useAgent } from "@/hooks/useAgent";
 import { useSandbox } from "@/hooks/useSandbox";
 import Sidebar from "@/components/Sidebar";
@@ -139,6 +140,9 @@ export default function Home() {
   const [subAgentSessionError, setSubAgentSessionError] = useState<string | null>(null);
   const [activeSubAgentSession, setActiveSubAgentSession] = useState<SubAgentSessionDetailData | null>(null);
   const [computerPanelReady, setComputerPanelReady] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deletePending, setDeletePending] = useState<{ id: string; title: string } | null>(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
   const [previewDragConstraints, setPreviewDragConstraints] = useState({
     top: -64,
     left: -1200,
@@ -246,8 +250,13 @@ export default function Home() {
   }, []);
 
   const handleNewChat = useCallback(() => {
-    void createConversation();
-  }, [createConversation]);
+    const emptyConv = conversations.find((c) => c.messageCount === 0);
+    if (emptyConv) {
+      void loadConversation(emptyConv.id);
+    } else {
+      void createConversation();
+    }
+  }, [conversations, createConversation, loadConversation]);
 
   const handleSendMessage = useCallback((text: string, options?: { deepResearch?: boolean; images?: ChatImagePayload[] }) => {
     if (options?.deepResearch) {
@@ -281,23 +290,29 @@ export default function Home() {
   );
 
   const handleDeleteConversation = useCallback(
-    async (id: string) => {
+    (id: string) => {
       if (!id) return;
-
       const target = conversations.find((conv) => conv.id === id);
       const title = target?.title?.trim() || "新对话";
-      const confirmed = window.confirm(`确认删除会话「${title}」？此操作不可恢复。`);
-      if (!confirmed) return;
-
-      const ok = await deleteConversation(id);
-      if (ok) {
-        toast("会话已删除");
-      } else {
-        toast("删除失败", { description: "请稍后重试。" });
-      }
+      setDeletePending({ id, title });
+      setDeleteDialogOpen(true);
     },
-    [conversations, deleteConversation]
+    [conversations]
   );
+
+  const handleConfirmDelete = useCallback(async () => {
+    if (!deletePending) return;
+    setDeleteLoading(true);
+    const ok = await deleteConversation(deletePending.id);
+    setDeleteLoading(false);
+    setDeleteDialogOpen(false);
+    setDeletePending(null);
+    if (ok) {
+      toast("会话已删除");
+    } else {
+      toast("删除失败", { description: "请稍后重试。" });
+    }
+  }, [deletePending, deleteConversation]);
 
   const handleDeepResearchSettingsChange = useCallback((next: DeepResearchSettingsData) => {
     setDeepResearchSettings({
@@ -443,7 +458,7 @@ export default function Home() {
             </div>
           </header>
 
-          {!computerOpen && (
+          {!computerOpen && conversationId && (
             <motion.div
               drag
               dragConstraints={previewDragConstraints}
@@ -747,6 +762,44 @@ export default function Home() {
               </div>
             </DialogContent>
           </Dialog>
+        {/* 删除确认弹框 */}
+        <Dialog open={deleteDialogOpen} onOpenChange={(open) => { if (!deleteLoading) setDeleteDialogOpen(open); }}>
+          <DialogContent className="sm:max-w-md bg-[#1a1f2e] border border-white/10 shadow-2xl">
+            <DialogHeader className="pb-2">
+              <div className="flex items-center gap-3 mb-1">
+                <div className="flex items-center justify-center w-10 h-10 rounded-full bg-red-500/15 border border-red-500/25">
+                  <AlertTriangle className="w-5 h-5 text-red-400" />
+                </div>
+                <DialogTitle className="text-base font-semibold text-white">删除对话</DialogTitle>
+              </div>
+              <DialogDescription className="text-sm text-white/50 pl-[52px] leading-relaxed">
+                确认删除会话「<span className="text-white/80 font-medium">{deletePending?.title}</span>」？此操作不可恢复。
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter className="pt-2 gap-2 sm:gap-2">
+              <Button
+                variant="ghost"
+                className="flex-1 h-9 text-sm text-white/60 hover:text-white hover:bg-white/8 border border-white/8"
+                onClick={() => setDeleteDialogOpen(false)}
+                disabled={deleteLoading}
+              >
+                取消
+              </Button>
+              <Button
+                className="flex-1 h-9 text-sm bg-red-500/90 hover:bg-red-500 text-white border-0 shadow-none"
+                onClick={handleConfirmDelete}
+                disabled={deleteLoading}
+              >
+                {deleteLoading ? (
+                  <><Loader2 className="w-4 h-4 mr-1.5 animate-spin" />删除中…</>
+                ) : (
+                  <><Trash2 className="w-4 h-4 mr-1.5" />删除</>
+                )}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
         </main>
 
         {/* 计算机窗口面板（预览点击后展开为右侧分栏） */}
