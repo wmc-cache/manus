@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from pathlib import Path
 from typing import AsyncGenerator, List, Dict, Any, Optional, Tuple
 
@@ -109,6 +110,7 @@ client = AsyncOpenAI(
     base_url=DEEPSEEK_BASE_URL,
     timeout=REQUEST_TIMEOUT,
 )
+_anthropic_http_client: Optional[httpx.AsyncClient] = None
 
 
 def _uses_anthropic_messages_api() -> bool:
@@ -136,6 +138,94 @@ def _anthropic_headers() -> Dict[str, str]:
         headers["x-api-key"] = DEEPSEEK_API_KEY
         headers["Authorization"] = f"Bearer {DEEPSEEK_API_KEY}"
     return headers
+
+
+def _get_anthropic_http_client() -> httpx.AsyncClient:
+    global _anthropic_http_client
+    if _anthropic_http_client is None or _anthropic_http_client.is_closed:
+        _anthropic_http_client = httpx.AsyncClient(
+            timeout=REQUEST_TIMEOUT,
+            limits=httpx.Limits(max_keepalive_connections=20, max_connections=100),
+        )
+    return _anthropic_http_client
+
+
+def _build_anthropic_payload(
+    messages: List[Dict[str, Any]],
+    *,
+    use_tools: bool = True,
+    allowed_tool_names: Optional[List[str]] = None,
+    stream: bool = False,
+) -> Dict[str, Any]:
+    safe_messages = _sanitize_messages_for_api(messages)
+    system_prompt, anthropic_messages = _convert_messages_to_anthropic(safe_messages)
+    payload: Dict[str, Any] = {
+        "model": DEEPSEEK_MODEL,
+        "system": system_prompt,
+        "messages": anthropic_messages,
+        "temperature": 0.7,
+        "max_tokens": DEEPSEEK_MAX_TOKENS,
+    }
+    selected_tools = _select_tools(allowed_tool_names)
+    if use_tools and selected_tools:
+        payload["tools"] = _convert_tools_to_anthropic(selected_tools)
+    if stream:
+        payload["stream"] = True
+    return payload
+
+
+async def _iter_anthropic_sse_events(
+    response: httpx.Response,
+) -> AsyncGenerator[Tuple[str, Dict[str, Any]], None]:
+    event_name = ""
+    data_lines: List[str] = []
+
+    async for raw_line in response.aiter_lines():
+        line = raw_line.rstrip("\r")
+        if not line:
+            if not data_lines:
+                event_name = ""
+                continue
+            raw_data = "\n".join(data_lines).strip()
+            data_lines = []
+            if not raw_data or raw_data == "[DONE]":
+                event_name = ""
+                continue
+            try:
+                payload = json.loads(raw_data)
+            except json.JSONDecodeError:
+                logger.warning(
+                    "Failed to decode Anthropic SSE event=%s data=%s",
+                    event_name or "(unknown)",
+                    raw_data[:300],
+                )
+                event_name = ""
+                continue
+            resolved_name = event_name or str(payload.get("type", "")).strip()
+            event_name = ""
+            if isinstance(payload, dict):
+                yield resolved_name, payload
+            continue
+
+        if line.startswith(":"):
+            continue
+        if line.startswith("event:"):
+            event_name = line[6:].strip()
+            continue
+        if line.startswith("data:"):
+            data_lines.append(line[5:].lstrip())
+
+    if data_lines:
+        raw_data = "\n".join(data_lines).strip()
+        if raw_data and raw_data != "[DONE]":
+            try:
+                payload = json.loads(raw_data)
+            except json.JSONDecodeError:
+                logger.warning("Failed to decode trailing Anthropic SSE data=%s", raw_data[:300])
+            else:
+                resolved_name = event_name or str(payload.get("type", "")).strip()
+                if isinstance(payload, dict):
+                    yield resolved_name, payload
 
 
 def _stringify_content(value: Any) -> str:
@@ -356,14 +446,20 @@ def _extract_anthropic_error(response: httpx.Response) -> str:
 
 
 async def _post_anthropic_messages(payload: Dict[str, Any]) -> Dict[str, Any]:
-    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as http_client:
-        response = await http_client.post(
-            f"{_anthropic_api_base_url()}/messages",
-            headers=_anthropic_headers(),
-            json=payload,
-        )
+    started_at = time.perf_counter()
+    response = await _get_anthropic_http_client().post(
+        f"{_anthropic_api_base_url()}/messages",
+        headers=_anthropic_headers(),
+        json=payload,
+    )
+    elapsed = time.perf_counter() - started_at
     if response.status_code >= 400:
         raise RuntimeError(_extract_anthropic_error(response))
+    logger.info(
+        "Anthropic completion model=%s elapsed=%.3fs",
+        payload.get("model") or DEEPSEEK_MODEL,
+        elapsed,
+    )
     return response.json()
 
 
@@ -441,22 +537,233 @@ async def _chat_completion_anthropic(
     use_tools: bool = True,
     allowed_tool_names: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    safe_messages = _sanitize_messages_for_api(messages)
-    system_prompt, anthropic_messages = _convert_messages_to_anthropic(safe_messages)
-    payload: Dict[str, Any] = {
-        "model": DEEPSEEK_MODEL,
-        "system": system_prompt,
-        "messages": anthropic_messages,
-        "temperature": 0.7,
-        "max_tokens": DEEPSEEK_MAX_TOKENS,
-    }
-    selected_tools = _select_tools(allowed_tool_names)
-    if use_tools and selected_tools:
-        payload["tools"] = _convert_tools_to_anthropic(selected_tools)
-
+    payload = _build_anthropic_payload(
+        messages,
+        use_tools=use_tools,
+        allowed_tool_names=allowed_tool_names,
+        stream=False,
+    )
     response_payload = await _create_anthropic_completion_with_retry(payload)
     _track_anthropic_usage(response_payload)
     return _parse_anthropic_response(response_payload)
+
+
+async def _chat_completion_anthropic_stream(
+    messages: List[Dict[str, Any]],
+    use_tools: bool = True,
+    allowed_tool_names: Optional[List[str]] = None,
+) -> AsyncGenerator[Dict[str, Any], None]:
+    payload = _build_anthropic_payload(
+        messages,
+        use_tools=use_tools,
+        allowed_tool_names=allowed_tool_names,
+        stream=True,
+    )
+    last_error = None
+
+    requested_model = str(payload.get("model") or DEEPSEEK_MODEL).strip() or DEEPSEEK_MODEL
+    candidate_models = [requested_model]
+    for fallback in DEEPSEEK_FALLBACK_MODELS:
+        if fallback not in candidate_models:
+            candidate_models.append(fallback)
+
+    def _build_tool_call_payload(block: Dict[str, Any]) -> Dict[str, Any]:
+        args, parse_error, preview = _parse_tool_arguments(block.get("arguments", ""))
+        item: Dict[str, Any] = {
+            "id": str(block.get("id", "")).strip(),
+            "name": str(block.get("name", "")).strip(),
+            "arguments": args,
+        }
+        if parse_error:
+            item["parse_error"] = parse_error
+            if preview:
+                item["raw_arguments_preview"] = preview
+        return item
+
+    for model_index, model_name in enumerate(candidate_models):
+        base_model_payload = dict(payload)
+        base_model_payload["model"] = model_name
+        retry_budget = MAX_RETRIES if model_index == 0 else max(1, min(2, MAX_RETRIES))
+
+        for attempt in range(retry_budget):
+            model_payload = dict(base_model_payload)
+            emitted_partial = False
+            first_emit_at: Optional[float] = None
+            started_at = time.perf_counter()
+            content_parts: List[str] = []
+            tool_calls: List[Dict[str, Any]] = []
+            content_blocks: Dict[int, Dict[str, Any]] = {}
+            usage: Dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
+
+            try:
+                async with _get_anthropic_http_client().stream(
+                    "POST",
+                    f"{_anthropic_api_base_url()}/messages",
+                    headers=_anthropic_headers(),
+                    json=model_payload,
+                ) as response:
+                    if response.status_code >= 400:
+                        await response.aread()
+                        raise RuntimeError(_extract_anthropic_error(response))
+
+                    async for event_name, event_payload in _iter_anthropic_sse_events(response):
+                        if not event_payload:
+                            continue
+
+                        if event_name == "message_start":
+                            message_obj = event_payload.get("message") or {}
+                            usage_obj = message_obj.get("usage") or {}
+                            usage["input_tokens"] = int(usage_obj.get("input_tokens") or 0)
+                            continue
+
+                        if event_name == "message_delta":
+                            usage_obj = event_payload.get("usage") or {}
+                            usage["output_tokens"] = int(
+                                usage_obj.get("output_tokens") or usage["output_tokens"]
+                            )
+                            continue
+
+                        if event_name == "content_block_start":
+                            index = int(event_payload.get("index") or 0)
+                            block = event_payload.get("content_block") or {}
+                            block_type = str(block.get("type", "")).strip()
+                            if block_type == "text":
+                                text = _stringify_content(block.get("text"))
+                                content_blocks[index] = {"type": "text"}
+                                if text:
+                                    content_parts.append(text)
+                                    emitted_partial = True
+                                    if first_emit_at is None:
+                                        first_emit_at = time.perf_counter()
+                                    yield {"type": "content", "data": text}
+                                continue
+
+                            if block_type == "tool_use":
+                                initial_input = block.get("input")
+                                initial_json = ""
+                                if isinstance(initial_input, dict) and initial_input:
+                                    initial_json = json.dumps(initial_input, ensure_ascii=False)
+                                content_blocks[index] = {
+                                    "type": "tool_use",
+                                    "id": str(block.get("id", "")).strip(),
+                                    "name": str(block.get("name", "")).strip(),
+                                    "arguments": initial_json,
+                                    "emitted": False,
+                                }
+                            continue
+
+                        if event_name == "content_block_delta":
+                            index = int(event_payload.get("index") or 0)
+                            delta = event_payload.get("delta") or {}
+                            delta_type = str(delta.get("type", "")).strip()
+
+                            if delta_type == "text_delta":
+                                text = _stringify_content(delta.get("text"))
+                                if text:
+                                    content_parts.append(text)
+                                    emitted_partial = True
+                                    if first_emit_at is None:
+                                        first_emit_at = time.perf_counter()
+                                    yield {"type": "content", "data": text}
+                                continue
+
+                            if delta_type == "input_json_delta":
+                                block = content_blocks.setdefault(
+                                    index,
+                                    {"type": "tool_use", "id": "", "name": "", "arguments": "", "emitted": False},
+                                )
+                                block["arguments"] = str(block.get("arguments", "")) + _stringify_content(
+                                    delta.get("partial_json")
+                                )
+                            continue
+
+                        if event_name == "content_block_stop":
+                            index = int(event_payload.get("index") or 0)
+                            block = content_blocks.get(index)
+                            if not block or block.get("type") != "tool_use" or block.get("emitted"):
+                                continue
+                            payload_item = _build_tool_call_payload(block)
+                            block["emitted"] = True
+                            tool_calls.append(payload_item)
+                            emitted_partial = True
+                            if first_emit_at is None:
+                                first_emit_at = time.perf_counter()
+                            yield {"type": "tool_call", "data": payload_item}
+                            continue
+
+                        if event_name == "error":
+                            error_obj = event_payload.get("error") or {}
+                            error_message = _stringify_content(error_obj.get("message")).strip()
+                            raise RuntimeError(error_message or "Anthropic stream error")
+
+                        if event_name == "message_stop":
+                            break
+
+                for block in content_blocks.values():
+                    if block.get("type") != "tool_use" or block.get("emitted"):
+                        continue
+                    payload_item = _build_tool_call_payload(block)
+                    block["emitted"] = True
+                    tool_calls.append(payload_item)
+                    emitted_partial = True
+                    if first_emit_at is None:
+                        first_emit_at = time.perf_counter()
+                    yield {"type": "tool_call", "data": payload_item}
+
+                _track_anthropic_usage({"usage": usage})
+                logger.info(
+                    "Anthropic stream model=%s first_emit=%.3fs total=%.3fs tool_calls=%d",
+                    model_name,
+                    (first_emit_at - started_at) if first_emit_at is not None else -1.0,
+                    time.perf_counter() - started_at,
+                    len(tool_calls),
+                )
+                yield {
+                    "type": "done",
+                    "data": {
+                        "content": "".join(content_parts),
+                        "tool_calls": tool_calls,
+                    },
+                }
+                return
+            except Exception as e:
+                last_error = e
+                err_text = str(e).lower()
+
+                if emitted_partial:
+                    raise
+
+                if (
+                    attempt == 0
+                    and model_payload.get("max_tokens") != DEEPSEEK_MAX_TOKENS_FALLBACK
+                    and "max_tokens" in err_text
+                ):
+                    base_model_payload["max_tokens"] = DEEPSEEK_MAX_TOKENS_FALLBACK
+                    continue
+
+                if _is_model_not_found(e):
+                    logger.warning(
+                        "Anthropic stream model `%s` unavailable, trying fallback model.",
+                        model_name,
+                    )
+                    break
+
+                if _is_retryable(e) and attempt < retry_budget - 1:
+                    delay = 2 ** attempt
+                    logger.warning(
+                        "Anthropic stream failed (model=%s attempt %d/%d), retrying in %ds: %s",
+                        model_name,
+                        attempt + 1,
+                        retry_budget,
+                        delay,
+                        str(e)[:200],
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+
+                raise
+
+    raise last_error  # type: ignore[misc]
 
 
 # ============ Enhanced System Prompt ============
@@ -1270,26 +1577,13 @@ async def chat_completion_stream(
 
     try:
         if _uses_anthropic_messages_api():
-            result = await _chat_completion_anthropic(
+            async for chunk in _chat_completion_anthropic_stream(
                 messages,
                 use_tools=use_tools,
                 allowed_tool_names=allowed_tool_names,
-            )
-            content = result.get("content", "")
-            if isinstance(content, str) and content:
-                yield {"type": "content", "data": content}
-            tool_calls = result.get("tool_calls", [])
-            if isinstance(tool_calls, list):
-                for tool_call in tool_calls:
-                    if isinstance(tool_call, dict):
-                        yield {"type": "tool_call", "data": tool_call}
-            yield {
-                "type": "done",
-                "data": {
-                    "content": content if isinstance(content, str) else "",
-                    "tool_calls": tool_calls if isinstance(tool_calls, list) else [],
-                },
-            }
+            ):
+                if isinstance(chunk, dict):
+                    yield chunk
             return
 
         safe_messages = _sanitize_messages_for_api(messages)

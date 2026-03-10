@@ -7,12 +7,21 @@
  * - 保留 Streamdown 的流式渲染能力
  * - 支持表格、链接、列表等标准 Markdown 元素
  */
-import { useMemo } from "react";
-import CodeBlock from "./CodeBlock";
+import { Suspense, lazy, useMemo } from "react";
 
 interface MarkdownRendererProps {
   content: string;
   streaming?: boolean;
+}
+
+const CodeBlock = lazy(() => import("./CodeBlock"));
+
+function CodeBlockFallback({ code }: { code: string }) {
+  return (
+    <pre className="overflow-x-auto rounded-lg border border-white/10 bg-black/40 p-3 font-mono text-xs text-white/70">
+      <code>{code}</code>
+    </pre>
+  );
 }
 
 // Parse markdown content into segments (text and code blocks)
@@ -269,11 +278,12 @@ export default function MarkdownRenderer({ content, streaming = false }: Markdow
       {segments.map((segment, idx) => {
         if (segment.type === "code") {
           return (
-            <CodeBlock
-              key={`code-${idx}`}
-              code={segment.content}
-              language={segment.language}
-            />
+            <Suspense key={`code-${idx}`} fallback={<CodeBlockFallback code={segment.content} />}>
+              <CodeBlock
+                code={segment.content}
+                language={segment.language}
+              />
+            </Suspense>
           );
         }
         return (

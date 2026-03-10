@@ -7,7 +7,7 @@
  * 字体: DM Sans (UI) + JetBrains Mono (代码)
  * 动画: Spring 物理动画，卡片悬停上浮
  */
-import { useRef, useEffect, useState, useCallback } from "react";
+import { Suspense, lazy, useRef, useEffect, useState, useCallback } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { PanelLeftClose, PanelLeft, Monitor, Maximize2, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -19,9 +19,10 @@ import EmptyState from "@/components/EmptyState";
 import MessageBubble from "@/components/MessageBubble";
 import ThinkingIndicator from "@/components/ThinkingIndicator";
 import ChatInput from "@/components/ChatInput";
-import ComputerPanel from "@/components/sandbox/ComputerPanel";
 import type { ChatImagePayload, DeepResearchSettingsData, SubAgentSessionDetailData } from "@/types";
 import { toast } from "sonner";
+
+const ComputerPanel = lazy(() => import("@/components/sandbox/ComputerPanel"));
 
 const PLAN_STATUS_LABEL: Record<string, string> = {
   pending: "待执行",
@@ -64,6 +65,17 @@ const DEFAULT_DEEP_RESEARCH_SETTINGS: DeepResearchSettingsData = {
   maxIterations: 4,
 };
 const PREVIEW_SCALE = 0.6;
+
+function ComputerPanelFallback({ compact = false }: { compact?: boolean }) {
+  return (
+    <div className={`flex h-full w-full items-center justify-center bg-background/55 text-muted-foreground ${compact ? "p-3" : "p-6"}`}>
+      <div className="flex flex-col items-center gap-2 text-center">
+        <Monitor className={compact ? "h-6 w-6" : "h-8 w-8"} />
+        <span className={compact ? "text-xs" : "text-sm"}>计算机面板加载中</span>
+      </div>
+    </div>
+  );
+}
 
 function clampInt(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
@@ -126,6 +138,7 @@ export default function Home() {
   const [subAgentSessionLoading, setSubAgentSessionLoading] = useState(false);
   const [subAgentSessionError, setSubAgentSessionError] = useState<string | null>(null);
   const [activeSubAgentSession, setActiveSubAgentSession] = useState<SubAgentSessionDetailData | null>(null);
+  const [computerPanelReady, setComputerPanelReady] = useState(false);
   const [previewDragConstraints, setPreviewDragConstraints] = useState({
     top: -64,
     left: -1200,
@@ -170,6 +183,31 @@ export default function Home() {
     setSubAgentSessionError(null);
     setActiveSubAgentSession(null);
   }, [conversationId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    let idleId: number | null = null;
+
+    const warmComputerPanel = () => {
+      if (!cancelled) {
+        setComputerPanelReady(true);
+      }
+    };
+
+    timeoutId = setTimeout(warmComputerPanel, 1200);
+    idleId = window.requestIdleCallback?.(warmComputerPanel, { timeout: 1200 }) ?? null;
+
+    return () => {
+      cancelled = true;
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      if (idleId !== null) {
+        window.cancelIdleCallback?.(idleId);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const recalcPreviewDragConstraints = () => {
@@ -290,8 +328,34 @@ export default function Home() {
   }, [conversationId, loadSubAgentSession]);
 
   const hasMessages = messages.length > 0;
+  const currentTool = currentToolCall ? { name: currentToolCall.name, arguments: currentToolCall.arguments } : null;
+  const computerPanelProps = {
+    connected: sandbox.connected,
+    activeWindow: sandbox.activeWindow,
+    onWindowChange: sandbox.setActiveWindow,
+    terminalOutput: sandbox.terminalOutput,
+    onTerminalInput: sandbox.sendTerminalInput,
+    browserData: sandbox.browserData,
+    editorFile: sandbox.editorFile,
+    fileTree: sandbox.fileTree,
+    onFileClick: sandbox.fetchFileContent,
+    onRefreshFiles: sandbox.fetchFileTree,
+    onDownloadAllFiles: sandbox.downloadAllFiles,
+    downloadingAllFiles: sandbox.downloadingAllFiles,
+    onBrowserClick: sandbox.browserClick,
+    onBrowserType: sandbox.browserType,
+    onBrowserNavigate: sandbox.browserNavigate,
+    onBrowserScroll: sandbox.browserScroll,
+    onBrowserKey: sandbox.browserKey,
+    browserInteractionError: sandbox.browserInteractionError,
+    currentTool,
+    isAgentWorking: isLoading,
+    exposedPorts: sandbox.exposedPorts,
+    conversationId: conversationId ?? undefined,
+  };
   const handleOpenComputerPanel = useCallback(() => {
     if (previewDragBlockedRef.current) return;
+    setComputerPanelReady(true);
     setComputerOpen(true);
   }, []);
 
@@ -401,30 +465,13 @@ export default function Home() {
                   height: `calc(100% / ${PREVIEW_SCALE})`,
                 }}
               >
-                <ComputerPanel
-                  connected={sandbox.connected}
-                  activeWindow={sandbox.activeWindow}
-                  onWindowChange={sandbox.setActiveWindow}
-                  terminalOutput={sandbox.terminalOutput}
-                  onTerminalInput={sandbox.sendTerminalInput}
-                  browserData={sandbox.browserData}
-                  editorFile={sandbox.editorFile}
-                  fileTree={sandbox.fileTree}
-                  onFileClick={sandbox.fetchFileContent}
-                  onRefreshFiles={sandbox.fetchFileTree}
-                  onDownloadAllFiles={sandbox.downloadAllFiles}
-                  downloadingAllFiles={sandbox.downloadingAllFiles}
-                  onBrowserClick={sandbox.browserClick}
-                  onBrowserType={sandbox.browserType}
-                  onBrowserNavigate={sandbox.browserNavigate}
-                  onBrowserScroll={sandbox.browserScroll}
-                  onBrowserKey={sandbox.browserKey}
-                  browserInteractionError={sandbox.browserInteractionError}
-                  currentTool={currentToolCall ? { name: currentToolCall.name, arguments: currentToolCall.arguments } : null}
-                  isAgentWorking={isLoading}
-                  exposedPorts={sandbox.exposedPorts}
-                  conversationId={conversationId ?? undefined}
-                />
+                {computerPanelReady ? (
+                  <Suspense fallback={<ComputerPanelFallback compact />}>
+                    <ComputerPanel {...computerPanelProps} />
+                  </Suspense>
+                ) : (
+                  <ComputerPanelFallback compact />
+                )}
               </div>
 
               <div className="absolute inset-0 bg-gradient-to-b from-transparent to-black/18 pointer-events-none" />
@@ -435,6 +482,7 @@ export default function Home() {
                 onPointerDown={(e) => e.stopPropagation()}
                 onClick={(e) => {
                   e.stopPropagation();
+                  setComputerPanelReady(true);
                   setComputerOpen(true);
                 }}
                 title="展开计算机面板"
@@ -712,30 +760,12 @@ export default function Home() {
               className="h-full border-l border-border/30 overflow-hidden"
               style={{ maxWidth: "700px", minWidth: "380px" }}
             >
-              <ComputerPanel
-                connected={sandbox.connected}
-                activeWindow={sandbox.activeWindow}
-                onWindowChange={sandbox.setActiveWindow}
-                terminalOutput={sandbox.terminalOutput}
-                onTerminalInput={sandbox.sendTerminalInput}
-                browserData={sandbox.browserData}
-                editorFile={sandbox.editorFile}
-                fileTree={sandbox.fileTree}
-                onFileClick={sandbox.fetchFileContent}
-                onRefreshFiles={sandbox.fetchFileTree}
-                onDownloadAllFiles={sandbox.downloadAllFiles}
-                downloadingAllFiles={sandbox.downloadingAllFiles}
-                onBrowserClick={sandbox.browserClick}
-                onBrowserType={sandbox.browserType}
-                onBrowserNavigate={sandbox.browserNavigate}
-                onBrowserScroll={sandbox.browserScroll}
-                onBrowserKey={sandbox.browserKey}
-                browserInteractionError={sandbox.browserInteractionError}
-                onClose={() => setComputerOpen(false)}
-                currentTool={currentToolCall ? { name: currentToolCall.name, arguments: currentToolCall.arguments } : null}
-                isAgentWorking={isLoading}
-                conversationId={conversationId ?? undefined}
-              />
+              <Suspense fallback={<ComputerPanelFallback />}>
+                <ComputerPanel
+                  {...computerPanelProps}
+                  onClose={() => setComputerOpen(false)}
+                />
+              </Suspense>
             </motion.div>
           )}
         </AnimatePresence>
