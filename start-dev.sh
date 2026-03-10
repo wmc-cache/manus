@@ -6,11 +6,14 @@ BACKEND_DIR="$ROOT_DIR/manus-mvp-backend/backend"
 FRONTEND_DIR="$ROOT_DIR/manus-frontend/client"
 VENV_PYTHON="$ROOT_DIR/.venv/bin/python"
 BACKEND_ENV_FILE="$BACKEND_DIR/.env"
+FRONTEND_SERVER_SCRIPT="$FRONTEND_DIR/scripts/serve-dist.mjs"
+FRONTEND_DIST_DIR="$FRONTEND_DIR/dist"
 
 RUN_DIR="$ROOT_DIR/.run"
 LOG_DIR="$RUN_DIR/logs"
 BACKEND_PID_FILE="$RUN_DIR/backend.pid"
 FRONTEND_PID_FILE="$RUN_DIR/frontend.pid"
+FRONTEND_BUILD_LOG_FILE="$LOG_DIR/frontend-build.log"
 
 BACKEND_PORT=8000
 FRONTEND_PORT=3000
@@ -102,14 +105,27 @@ start_frontend() {
     echo "Missing frontend dependencies. Run: cd $FRONTEND_DIR && npm install"
     exit 1
   fi
+  if [[ ! -f "$FRONTEND_SERVER_SCRIPT" ]]; then
+    echo "Frontend static server script not found: $FRONTEND_SERVER_SCRIPT"
+    exit 1
+  fi
 
   stop_port_service "$FRONTEND_PORT"
 
-  (
-    cd "$FRONTEND_DIR"
-    nohup npm run dev -- --host 0.0.0.0 --port "$FRONTEND_PORT" >"$LOG_DIR/frontend.log" 2>&1 &
-    echo "$!" >"$FRONTEND_PID_FILE"
-  )
+  cd "$FRONTEND_DIR"
+
+  echo "Building frontend assets..."
+  if ! npm run build >"$FRONTEND_BUILD_LOG_FILE" 2>&1; then
+    echo "Frontend build failed. See: $FRONTEND_BUILD_LOG_FILE"
+    exit 1
+  fi
+  if [[ ! -f "$FRONTEND_DIST_DIR/index.html" ]]; then
+    echo "Frontend build output missing: $FRONTEND_DIST_DIR/index.html"
+    exit 1
+  fi
+
+  nohup /usr/bin/node "$FRONTEND_SERVER_SCRIPT" "$FRONTEND_PORT" >"$LOG_DIR/frontend.log" 2>&1 &
+  echo "$!" >"$FRONTEND_PID_FILE"
 
   echo "Frontend started on :$FRONTEND_PORT (PID $(cat "$FRONTEND_PID_FILE"))."
 }
@@ -124,6 +140,7 @@ echo "  Backend:  http://localhost:$BACKEND_PORT"
 echo
 echo "Logs:"
 echo "  $LOG_DIR/backend.log"
+echo "  $FRONTEND_BUILD_LOG_FILE"
 echo "  $LOG_DIR/frontend.log"
 echo
 echo "Stop command:"
