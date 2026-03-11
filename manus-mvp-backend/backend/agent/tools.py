@@ -1282,7 +1282,7 @@ async def expose_port(port: int, label: str = "") -> str:
         f"端口 {port} 已成功暴露！\n"
         f"用户可通过以下链接在浏览器中直接访问：\n"
         f"  相对路径: {proxy_path}\n"
-        f"  完整地址: {os.environ.get("PUBLIC_BASE_URL", "http://localhost:3000")}{proxy_path}"
+        f"  完整地址: {os.environ.get('PUBLIC_BASE_URL', 'http://localhost:3000')}{proxy_path}"
     )
 
 
