@@ -12,7 +12,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Query
 
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from middleware.auth import is_authorized_ws
 from sandbox.event_bus import event_bus, SandboxEvent
@@ -34,6 +34,19 @@ async def get_files(conversation_id: str = Query(None)):
     tree = await get_file_tree(conversation_id)
     root = get_workspace_root(conversation_id)
     return {"root": root, "tree": tree}
+
+
+@router.get("/uploads/{conversation_id}/{filename:path}")
+async def serve_upload(conversation_id: str, filename: str):
+    """服务会话上传的图片文件。"""
+    workspace_root = Path(get_workspace_root(conversation_id)).resolve()
+    file_path = (workspace_root / "uploads" / filename).resolve()
+    # 路径穿越防护
+    if workspace_root not in file_path.parents and file_path != workspace_root:
+        raise HTTPException(status_code=403, detail="Access denied")
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(file_path)
 
 
 @router.get("/files/download")
