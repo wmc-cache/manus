@@ -576,7 +576,7 @@ export default function Home() {
                 )}
 
                 {messages.map((msg) => (
-                  <MessageBubble key={msg.id} message={msg} />
+                  <MessageBubble key={msg.id} message={msg} conversationId={conversationId} />
                 ))}
 
                 <AnimatePresence>

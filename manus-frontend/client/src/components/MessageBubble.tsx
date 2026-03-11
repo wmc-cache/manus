@@ -14,9 +14,10 @@ import MarkdownRenderer from "./MarkdownRenderer";
 
 interface MessageBubbleProps {
   message: Message;
+  conversationId?: string;
 }
 
-export default function MessageBubble({ message }: MessageBubbleProps) {
+export default function MessageBubble({ message, conversationId }: MessageBubbleProps) {
   const isUser = message.role === "user";
   const hasToolCalls = message.toolCalls && message.toolCalls.length > 0;
   const hasContent = !!message.content;
@@ -52,10 +53,15 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
             {images.map((image, idx) => {
               const key = `${image.path || image.name || "image"}-${idx}`;
               const label = image.path || image.name || "image";
-              if (image.data_url) {
+              const imgSrc = image.data_url
+                ? image.data_url
+                : image.path && conversationId
+                  ? `/api/sandbox/uploads/${conversationId}/${image.path.replace(/^uploads\//, "")}`
+                  : null;
+              if (imgSrc) {
                 return (
                   <div key={key} className="w-28 h-28 rounded-lg overflow-hidden border border-border/40 bg-background/40">
-                    <img src={image.data_url} alt={image.name || "uploaded image"} className="w-full h-full object-cover" />
+                    <img src={imgSrc} alt={image.name || "uploaded image"} className="w-full h-full object-cover" />
                   </div>
                 );
               }
