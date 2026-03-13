@@ -6,9 +6,17 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
-from sandbox.docker_sandbox import sandbox_manager
+import os
+import subprocess
+
 from sandbox.event_bus import SandboxEvent, event_bus
-from sandbox.raw_tcp_proxy import docker_exec_raw_tcp_proxy
+
+# 是否使用 Docker 模式（默认 false，直接连接本机 Chromium）
+_USE_DOCKER = os.environ.get("MANUS_USE_DOCKER", "false").lower() == "true"
+
+if _USE_DOCKER:
+    from sandbox.docker_sandbox import sandbox_manager
+    from sandbox.raw_tcp_proxy import docker_exec_raw_tcp_proxy
 
 logger = logging.getLogger("sandbox.browser")
 
@@ -209,22 +217,84 @@ class BrowserService:
                 raise
 
     async def _ensure_remote_browser(self, conversation_id: Optional[str]):
-        """确保容器内桌面和 Chromium 可用。"""
-        code, _, stderr = await sandbox_manager.exec_command(
-            _ENSURE_DESKTOP_COMMAND,
-            conversation_id=conversation_id,
-            timeout=40,
-        )
-        if code != 0:
-            raise RuntimeError(f"启动桌面环境失败: {stderr.strip() or 'unknown error'}")
+        """确保 Chromium 可用（本地模式直接启动，Docker 模式通过 sandbox_manager）。"""
+        if _USE_DOCKER:
+            code, _, stderr = await sandbox_manager.exec_command(
+                _ENSURE_DESKTOP_COMMAND,
+                conversation_id=conversation_id,
+                timeout=40,
+            )
+            if code != 0:
+                raise RuntimeError(f"启动桌面环境失败: {stderr.strip() or 'unknown error'}")
 
-        code, _, stderr = await sandbox_manager.exec_command(
-            _ENSURE_REMOTE_BROWSER_COMMAND,
-            conversation_id=conversation_id,
-            timeout=15,
+            code, _, stderr = await sandbox_manager.exec_command(
+                _ENSURE_REMOTE_BROWSER_COMMAND,
+                conversation_id=conversation_id,
+                timeout=15,
+            )
+            if code != 0:
+                raise RuntimeError(f"启动 Chromium 失败: {stderr.strip() or 'unknown error'}")
+        else:
+            await self._ensure_local_browser()
+
+    async def _ensure_local_browser(self):
+        """本地模式：确保本机 Chromium 已启动并监听 CDP 端口。"""
+        import socket as _socket
+        # 检查 CDP 端口是否已可用
+        try:
+            s = _socket.create_connection(("127.0.0.1", _REMOTE_BROWSER_PORT), timeout=1)
+            s.close()
+            return  # 已在运行
+        except OSError:
+            pass
+
+        # 查找可用的 Chromium 可执行文件
+        display = os.environ.get("DISPLAY", ":1")
+        for browser_bin in ["google-chrome", "chromium-browser", "chromium"]:
+            import shutil
+            if shutil.which(browser_bin):
+                break
+        else:
+            raise RuntimeError("未找到 Chromium 可执行文件，请安装 chromium-browser")
+
+        import pathlib
+        profile_dir = pathlib.Path(_REMOTE_BROWSER_PROFILE)
+        profile_dir.mkdir(parents=True, exist_ok=True)
+
+        env = os.environ.copy()
+        env["DISPLAY"] = display
+        subprocess.Popen(
+            [
+                browser_bin,
+                "--no-sandbox",
+                "--disable-gpu",
+                "--disable-dev-shm-usage",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--remote-debugging-address=127.0.0.1",
+                f"--remote-debugging-port={_REMOTE_BROWSER_PORT}",
+                f"--user-data-dir={profile_dir}",
+                "--window-size=1280,800",
+                "about:blank",
+            ],
+            stdout=open("/tmp/manus-chromium.log", "w"),
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            env=env,
         )
-        if code != 0:
-            raise RuntimeError(f"启动 Chromium 失败: {stderr.strip() or 'unknown error'}")
+        # 等待 CDP 端口就绪（最多 15 秒）
+        deadline = asyncio.get_event_loop().time() + 15
+        last_error = None
+        while asyncio.get_event_loop().time() < deadline:
+            try:
+                s = _socket.create_connection(("127.0.0.1", _REMOTE_BROWSER_PORT), timeout=1)
+                s.close()
+                logger.info("本地 Chromium 已启动，CDP 端口 %d 就绪", _REMOTE_BROWSER_PORT)
+                return
+            except OSError as exc:
+                last_error = exc
+                await asyncio.sleep(0.3)
+        raise RuntimeError(f"本地 Chromium 启动超时，CDP 端口未就绪: {last_error}")
 
     async def _connect_over_cdp(self, local_port: int):
         """连接宿主机本地隧道上的 Chromium CDP。"""
@@ -279,14 +349,18 @@ class BrowserService:
         """创建新的 CDP 会话。"""
         await self._ensure_runtime()
         await self._ensure_remote_browser(conversation_id)
-        sandbox = await sandbox_manager.get_or_create(conversation_id)
 
-        tunnel_key = self._tunnel_key(conversation_id)
-        local_port = await docker_exec_raw_tcp_proxy.create_tunnel(
-            sandbox.container_name,
-            _REMOTE_BROWSER_PORT,
-            tunnel_key,
-        )
+        if _USE_DOCKER:
+            sandbox = await sandbox_manager.get_or_create(conversation_id)
+            tunnel_key = self._tunnel_key(conversation_id)
+            local_port = await docker_exec_raw_tcp_proxy.create_tunnel(
+                sandbox.container_name,
+                _REMOTE_BROWSER_PORT,
+                tunnel_key,
+            )
+        else:
+            tunnel_key = self._tunnel_key(conversation_id)
+            local_port = _REMOTE_BROWSER_PORT
 
         try:
             browser = await self._connect_over_cdp(local_port)
@@ -300,7 +374,8 @@ class BrowserService:
             await self._refresh_session_targets(session)
             return session
         except Exception:
-            docker_exec_raw_tcp_proxy.close_tunnel(tunnel_key)
+            if _USE_DOCKER:
+                docker_exec_raw_tcp_proxy.close_tunnel(tunnel_key)
             raise
 
     async def _dispose_session(self, session: BrowserSession):
@@ -310,7 +385,8 @@ class BrowserService:
                 await session.browser.close()
         except Exception:
             pass
-        docker_exec_raw_tcp_proxy.close_tunnel(session.tunnel_key)
+        if _USE_DOCKER:
+            docker_exec_raw_tcp_proxy.close_tunnel(session.tunnel_key)
 
     async def _ensure_session(self, conversation_id: Optional[str]) -> BrowserSession:
         """确保指定会话拥有绑定到 VNC Chromium 的页面。"""
