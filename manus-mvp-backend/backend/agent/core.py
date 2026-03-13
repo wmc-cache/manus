@@ -23,7 +23,13 @@ from agent.tool_executor import ToolExecutor
 from agent.message_builder import MessageBuilder
 from agent.planner import Planner
 from agent.tools import execute_tool
-from llm.deepseek import chat_completion, chat_completion_stream
+from llm.deepseek import (
+    DEEPSEEK_BASE_URL,
+    chat_completion,
+    chat_completion_stream,
+    llm_supports_vision,
+    vision_capability_error,
+)
 from models.schemas import (
     SSEEventType,
     Conversation,
@@ -259,15 +265,48 @@ class AgentEngine:
                 images=normalized_images,
             )
             conversation.messages.append(user_msg)
+            self._store._maybe_refresh_conversation_title(conversation, preferred_source=effective_user_message)
 
         conversation.limit_reached = False
         conversation.continue_message = None
 
+        if normalized_images and not llm_supports_vision():
+            error_message = vision_capability_error()
+            logger.warning(
+                "[AgentLoop] Rejecting image request because configured gateway lacks vision support: base_url=%s",
+                DEEPSEEK_BASE_URL,
+            )
+            conversation.messages.append(Message(role=MessageRole.ASSISTANT, content=error_message))
+            self._save_conversations()
+
+            yield {
+                "event": SSEEventType.CONTENT,
+                "data": json.dumps({
+                    "conversation_id": conversation.id,
+                    "type": "conversation_info"
+                }, ensure_ascii=False)
+            }
+            yield {
+                "event": SSEEventType.CONTENT,
+                "data": json.dumps({
+                    "content": error_message,
+                    "type": "final_answer",
+                }, ensure_ascii=False)
+            }
+            yield {
+                "event": SSEEventType.DONE,
+                "data": json.dumps({
+                    "conversation_id": conversation.id,
+                    "iterations": 0,
+                    "limit_reached": False,
+                    "max_iterations": settings.agent.max_iterations,
+                    "continue_message": "",
+                }, ensure_ascii=False)
+            }
+            return
+
         # 更新计划
         plan_reason = await self._plan_mgr.ensure_plan_for_turn(conversation, effective_user_message)
-
-        if record_user_message:
-            self._store._maybe_refresh_conversation_title(conversation, preferred_source=effective_user_message)
         self._save_conversations()
 
         # 发送对话 ID

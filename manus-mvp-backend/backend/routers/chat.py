@@ -11,6 +11,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query
 
 from config.settings import settings
+from llm.deepseek import llm_supports_vision
 from models.schemas import ChatRequest, SSEEventType
 from services.upload import persist_uploaded_images
 from sandbox.filesystem import get_workspace_root
@@ -131,7 +132,8 @@ async def chat(request: ChatRequest):
     if not request.message.strip() and not uploaded_images:
         raise HTTPException(status_code=400, detail="消息不能为空，或上传图片无效")
 
-    _schedule_docker_preheat(conversation.id)
+    if not (uploaded_images and not llm_supports_vision()):
+        _schedule_docker_preheat(conversation.id)
 
     async def event_generator():
         registered_resume = False

@@ -100,6 +100,18 @@ def _read_int_env(name: str, default: int, minimum: int = 1) -> int:
         return default
 
 
+def _read_optional_bool_env(*names: str) -> Optional[bool]:
+    for name in names:
+        raw = os.environ.get(name, "").strip().lower()
+        if not raw:
+            continue
+        if raw in {"1", "true", "yes", "on"}:
+            return True
+        if raw in {"0", "false", "no", "off"}:
+            return False
+    return None
+
+
 DEEPSEEK_MAX_TOKENS = _read_int_env("DEEPSEEK_MAX_TOKENS", 8192, minimum=256)
 DEEPSEEK_MAX_TOKENS_FALLBACK = _read_int_env("DEEPSEEK_MAX_TOKENS_FALLBACK", 4096, minimum=256)
 MAX_RETRIES = _read_int_env("DEEPSEEK_MAX_RETRIES", 3, minimum=1)
@@ -120,6 +132,31 @@ def _uses_anthropic_messages_api() -> bool:
     if "/v1/openai" in base_url or "/openai/" in base_url:
         return False
     return "anthropic" in base_url
+
+
+def llm_supports_vision() -> bool:
+    explicit = _read_optional_bool_env(
+        "MANUS_LLM_SUPPORTS_VISION",
+        "CLAUDE_SUPPORTS_VISION",
+        "DEEPSEEK_SUPPORTS_VISION",
+    )
+    if explicit is not None:
+        return explicit
+
+    base_url = (DEEPSEEK_BASE_URL or "").strip().lower()
+    if "hone.vvvv.ee" in base_url:
+        return False
+    return True
+
+
+def vision_capability_error() -> str:
+    base_url = (DEEPSEEK_BASE_URL or "").strip()
+    gateway_hint = f"\n当前网关: {base_url}" if base_url else ""
+    return (
+        "当前服务已收到图片，但当前配置的模型网关不支持图片理解。"
+        f"{gateway_hint}"
+        "\n请切换到支持视觉输入的模型/网关后重试，或先用文字描述图片内容。"
+    )
 
 
 def _anthropic_api_base_url() -> str:
