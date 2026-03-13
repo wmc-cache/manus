@@ -18,11 +18,41 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-ENSURE_DESKTOP_COMMAND = (
-    "pgrep -f 'x11vnc .*5900' >/dev/null"
-    " || pgrep -f '/usr/local/bin/start-desktop.sh' >/dev/null"
-    " || nohup /usr/local/bin/start-desktop.sh >/tmp/manus-desktop.log 2>&1 &"
-)
+ENSURE_DESKTOP_COMMAND = """
+if pgrep -f 'x11vnc .*5900' >/dev/null 2>&1; then
+  python3 - <<'PY' >/dev/null 2>&1 && exit 0
+import socket
+s = socket.create_connection(("127.0.0.1", 5900), timeout=2)
+s.close()
+PY
+fi
+
+pkill -x x11vnc >/dev/null 2>&1 || true
+
+if ! pgrep -f 'Xvfb :99' >/dev/null 2>&1; then
+  rm -f /tmp/.X99-lock /tmp/.X11-unix/X99
+  nohup Xvfb :99 -screen 0 1280x800x24 -ac +extension GLX +render -noreset >/tmp/xvfb.log 2>&1 < /dev/null &
+  sleep 2
+fi
+
+export DISPLAY=:99
+pgrep -x openbox >/dev/null 2>&1 || nohup openbox >/tmp/openbox.log 2>&1 < /dev/null &
+sleep 1
+pgrep -x x11vnc >/dev/null 2>&1 || nohup x11vnc -display :99 -forever -nopw -shared -rfbport 5900 -xkb >/tmp/x11vnc.log 2>&1 < /dev/null &
+
+python3 - <<'PY'
+import socket, time
+deadline = time.time() + 15
+while time.time() < deadline:
+    try:
+        s = socket.create_connection(("127.0.0.1", 5900), timeout=1)
+        s.close()
+        exit(0)
+    except OSError:
+        time.sleep(0.5)
+exit(1)
+PY
+""".strip()
 
 # ---------------------------------------------------------------------------
 # 容器内 TCP 桥接脚本 — 连接 localhost:5900 并在 stdin/stdout 上双向转发
