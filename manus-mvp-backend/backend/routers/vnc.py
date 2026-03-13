@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 ENSURE_DESKTOP_COMMAND = """
+# 快速路径：x11vnc 已运行且端口可达
 if pgrep -f 'x11vnc .*5900' >/dev/null 2>&1; then
   python3 - <<'PY' >/dev/null 2>&1 && exit 0
 import socket
@@ -29,16 +30,24 @@ fi
 
 pkill -x x11vnc >/dev/null 2>&1 || true
 
+# 启动 Xvfb（若未运行）
 if ! pgrep -f 'Xvfb :99' >/dev/null 2>&1; then
   rm -f /tmp/.X99-lock /tmp/.X11-unix/X99
   nohup Xvfb :99 -screen 0 1280x800x24 -ac +extension GLX +render -noreset >/tmp/xvfb.log 2>&1 < /dev/null &
-  sleep 2
+  sleep 3
+fi
+
+# 确保 X11 socket 存在
+if [ ! -S /tmp/.X11-unix/X99 ]; then
+  echo "Xvfb socket missing" >&2
+  exit 1
 fi
 
 export DISPLAY=:99
 pgrep -x openbox >/dev/null 2>&1 || nohup openbox >/tmp/openbox.log 2>&1 < /dev/null &
-sleep 1
-pgrep -x x11vnc >/dev/null 2>&1 || nohup x11vnc -display :99 -forever -nopw -shared -rfbport 5900 -xkb >/tmp/x11vnc.log 2>&1 < /dev/null &
+sleep 0.5
+
+nohup x11vnc -display :99 -forever -nopw -shared -rfbport 5900 -xkb >/tmp/x11vnc.log 2>&1 < /dev/null &
 
 python3 - <<'PY'
 import socket, time
