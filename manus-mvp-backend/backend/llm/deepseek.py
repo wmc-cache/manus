@@ -1246,12 +1246,41 @@ TOOLS = [
                 "required": ["regex"]
             }
         }
-    },
+     },
 ]
 
+# ---------------------------------------------------------------------------
+# MCP 工具定义同步：若启用 MCP 模式，将 MCP 工具定义同步到 TOOLS 列表
+# ---------------------------------------------------------------------------
+import os as _os
+_USE_MCP = _os.environ.get("MANUS_USE_MCP", "true").strip().lower() in ("1", "true", "yes")
+if _USE_MCP:
+    try:
+        import sys as _sys
+        import pathlib as _pathlib
+        _mcp_shared = str(
+            _pathlib.Path(__file__).resolve().parents[3]
+            / "mcp-services" / "mcp-shared"
+        )
+        if _mcp_shared not in _sys.path:
+            _sys.path.insert(0, _mcp_shared)
+        from agent.tools_mcp import MCP_TOOL_DEFINITIONS as _MCP_DEFS
+        _existing_names = {t.get("function", {}).get("name") for t in TOOLS}
+        for _mcp_tool in _MCP_DEFS:
+            _name = _mcp_tool.get("name")
+            if _name and _name not in _existing_names:
+                TOOLS.append({"type": "function", "function": _mcp_tool})
+        import logging as _logging
+        _logging.getLogger(__name__).info(
+            "[deepseek] MCP 模式已启用，工具总数: %d", len(TOOLS)
+        )
+    except Exception as _mcp_sync_err:
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            "[deepseek] MCP 工具定义同步失败，使用原始工具列表: %s", _mcp_sync_err
+        )
 
 # ============ Parsing Utilities ============
-
 def _parse_tool_arguments(raw_arguments: Any) -> Tuple[Dict[str, Any], Optional[str], str]:
     """解析工具参数，避免把解析失败静默吞成 {}。"""
     if isinstance(raw_arguments, dict):

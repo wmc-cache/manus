@@ -22,7 +22,8 @@ from agent.plan_manager import PlanManager
 from agent.tool_executor import ToolExecutor
 from agent.message_builder import MessageBuilder
 from agent.planner import Planner
-from agent.tools import execute_tool
+# MCP 适配器：根据 MANUS_USE_MCP 环境变量自动选择本地或 MCP 执行
+from agent.tools_mcp import execute_tool
 from llm.deepseek import (
     DEEPSEEK_BASE_URL,
     chat_completion,

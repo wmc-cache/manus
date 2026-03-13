@@ -1,0 +1,193 @@
+# ============================================================
+# Manus MVP — MCP 微服务架构 Docker Compose 配置
+# ============================================================
+# 包含：后端服务 + 前端服务 + 4 个 MCP 工具微服务 + 共享网络
+# 使用方式：
+#   docker compose -f docker/docker-compose.mcp.yml up -d
+# ============================================================
+
+version: "3.8"
+
+services:
+
+  # ============================================================
+  # MCP 工具微服务层
+  # ============================================================
+
+  # ---- mcp-filesystem: 文件系统操作 ----
+  mcp-filesystem:
+    build:
+      context: ../mcp-services
+      dockerfile: mcp-filesystem/Dockerfile
+    container_name: manus-mcp-filesystem
+    ports:
+      - "8101:8101"
+    environment:
+      - MANUS_WORKSPACE_BASE=/tmp/manus_workspace
+      - MCP_FILESYSTEM_PORT=8101
+    volumes:
+      - manus-workspace:/tmp/manus_workspace
+    networks:
+      - manus-mcp-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8101/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ---- mcp-execution: 代码与命令执行 ----
+  mcp-execution:
+    build:
+      context: ../mcp-services
+      dockerfile: mcp-execution/Dockerfile
+    container_name: manus-mcp-execution
+    ports:
+      - "8102:8102"
+    environment:
+      - MANUS_WORKSPACE_BASE=/tmp/manus_workspace
+      - MCP_EXECUTION_PORT=8102
+      - MCP_SHELL_TIMEOUT=30
+      - MCP_CODE_TIMEOUT=30
+      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-}
+    volumes:
+      - manus-workspace:/tmp/manus_workspace
+    networks:
+      - manus-mcp-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8102/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ---- mcp-browser: 浏览器操作 ----
+  mcp-browser:
+    build:
+      context: ../mcp-services
+      dockerfile: mcp-browser/Dockerfile
+    container_name: manus-mcp-browser
+    ports:
+      - "8103:8103"
+    environment:
+      - MCP_BROWSER_PORT=8103
+    networks:
+      - manus-mcp-net
+    restart: unless-stopped
+    # 浏览器服务启动较慢，给予更长的启动时间
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8103/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # ---- mcp-research: 搜索与研究 ----
+  mcp-research:
+    build:
+      context: ../mcp-services
+      dockerfile: mcp-research/Dockerfile
+    container_name: manus-mcp-research
+    ports:
+      - "8104:8104"
+    environment:
+      - TAVILY_API_KEY=${TAVILY_API_KEY:-}
+      - MCP_RESEARCH_PORT=8104
+      - MANUS_WIDE_RESEARCH_MAX_ITEMS=20
+      - MANUS_WIDE_RESEARCH_CONCURRENCY=5
+      - MCP_EXECUTION_URL=http://mcp-execution:8102
+    networks:
+      - manus-mcp-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8104/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ============================================================
+  # 主后端服务（Agent 核心）
+  # ============================================================
+  backend:
+    build:
+      context: ../manus-mvp-backend/backend
+      dockerfile: ../../docker/backend/Dockerfile
+    container_name: manus-backend
+    ports:
+      - "8000:8000"
+    environment:
+      # MCP 模式开关（true = 使用 MCP 微服务，false = 本地执行）
+      - MANUS_USE_MCP=true
+      # MCP 服务地址（使用 Docker Compose 服务名）
+      - MCP_FILESYSTEM_URL=http://mcp-filesystem:8101
+      - MCP_EXECUTION_URL=http://mcp-execution:8102
+      - MCP_BROWSER_URL=http://mcp-browser:8103
+      - MCP_RESEARCH_URL=http://mcp-research:8104
+      - MCP_REQUEST_TIMEOUT=120
+      # Docker 沙箱配置（保留兼容性）
+      - MANUS_DOCKER_SANDBOX=false
+      - MANUS_HOST_WORKSPACE_BASE=/tmp/manus_workspace
+      # API 配置
+      - MANUS_ALLOWED_ORIGINS=*
+      # LLM 配置
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+      - CLAUDE_BASE_URL=${CLAUDE_BASE_URL:-}
+      - CLAUDE_MODEL=${CLAUDE_MODEL:-}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - TAVILY_API_KEY=${TAVILY_API_KEY:-}
+      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-}
+    volumes:
+      - manus-workspace:/tmp/manus_workspace
+    networks:
+      - manus-net
+      - manus-mcp-net
+    depends_on:
+      mcp-filesystem:
+        condition: service_healthy
+      mcp-execution:
+        condition: service_healthy
+      mcp-research:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # ============================================================
+  # 前端服务
+  # ============================================================
+  frontend:
+    build:
+      context: ../manus-frontend
+      dockerfile: ../docker/frontend/Dockerfile
+    container_name: manus-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - VITE_API_BASE_URL=http://backend:8000
+    networks:
+      - manus-net
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  manus-workspace:
+    driver: local
+
+networks:
+  # 前端 <-> 后端 通信网络
+  manus-net:
+    driver: bridge
+  # 后端 <-> MCP 服务 通信网络（内部隔离）
+  manus-mcp-net:
+    driver: bridge
+    name: manus-mcp-net
