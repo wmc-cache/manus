@@ -1,23 +1,32 @@
 """
-VNC WebSocket Relay — 将前端 noVNC 的 WebSocket 流量中转到沙箱容器的 VNC 服务 (端口 5900)。
+VNC WebSocket Relay — 将前端 noVNC 的 WebSocket 流量中转到 VNC 服务 (端口 5900)。
 
-通过 `docker exec -i` 在容器内运行 Python TCP 桥接脚本，
-实现 WebSocket ↔ stdio ↔ TCP(5900) 的双向持久转发。
+支持两种模式：
+1. Docker 模式（MANUS_USE_DOCKER=true）：通过 `docker exec -i` 在容器内运行 Python TCP 桥接脚本
+2. 本地模式（默认）：直接连接本机 5900 端口，实现 WebSocket ↔ TCP(5900) 双向转发
 """
 
 import asyncio
 import logging
+import os
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
 
 from middleware.auth import is_authorized_ws
-from sandbox.docker_sandbox import sandbox_manager
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# 是否使用 Docker 模式
+USE_DOCKER = os.environ.get("MANUS_USE_DOCKER", "false").lower() == "true"
+VNC_HOST = os.environ.get("VNC_HOST", "localhost")
+VNC_PORT = int(os.environ.get("VNC_PORT", "5900"))
+
+# ---------------------------------------------------------------------------
+# Docker 模式相关（保留向后兼容）
+# ---------------------------------------------------------------------------
 ENSURE_DESKTOP_COMMAND = """
 set -e
 
@@ -106,9 +115,6 @@ fi
 wait_for_vnc_port
 """.strip()
 
-# ---------------------------------------------------------------------------
-# 容器内 TCP 桥接脚本 — 连接 localhost:5900 并在 stdin/stdout 上双向转发
-# ---------------------------------------------------------------------------
 VNC_BRIDGE_SCRIPT = (
     "import socket,sys,threading,time\n"
     "deadline=time.time()+10\n"
@@ -145,7 +151,7 @@ VNC_BRIDGE_SCRIPT = (
 
 
 async def _ensure_desktop_service(container_name: str):
-    """确保容器内桌面服务已启动，兼容旧容器仍在运行 sleep infinity 的情况。"""
+    """确保容器内桌面服务已启动（Docker 模式专用）。"""
     proc = await asyncio.create_subprocess_exec(
         "docker", "exec", container_name,
         "/bin/bash", "-c", ENSURE_DESKTOP_COMMAND,
@@ -160,25 +166,44 @@ async def _ensure_desktop_service(container_name: str):
 
 @router.websocket("/ws/vnc/{conversation_id}")
 async def vnc_relay(websocket: WebSocket, conversation_id: str):
-    """VNC WebSocket relay: 前端 noVNC ↔ 沙箱 x11vnc"""
+    """VNC WebSocket relay: 前端 noVNC ↔ VNC 服务"""
 
     # 鉴权
     if not is_authorized_ws(websocket):
         await websocket.close(code=1008, reason="Unauthorized")
         return
 
+    if USE_DOCKER:
+        # Docker 模式：通过 sandbox_manager 获取容器
+        try:
+            from sandbox.docker_sandbox import sandbox_manager
+            if not sandbox_manager._initialized:
+                await sandbox_manager.initialize()
+            sandbox = await sandbox_manager.get_or_create(conversation_id)
+            await _ensure_desktop_service(sandbox.container_name)
+        except Exception as exc:
+            logger.error("Failed to prepare VNC sandbox for %s: %s", conversation_id, exc)
+            await websocket.close(code=1011, reason="Sandbox unavailable")
+            return
+        await _relay_via_docker(websocket, sandbox.container_name, conversation_id)
+    else:
+        # 本地模式：直接连接本机 VNC 端口
+        await _relay_local(websocket, conversation_id)
+
+
+async def _relay_local(websocket: WebSocket, conversation_id: str):
+    """本地模式：WebSocket ↔ 本机 TCP VNC 直连"""
+    # 检查 VNC 端口是否可达
     try:
-        if not sandbox_manager._initialized:
-            await sandbox_manager.initialize()
-        sandbox = await sandbox_manager.get_or_create(conversation_id)
-        await _ensure_desktop_service(sandbox.container_name)
-    except Exception as exc:
-        logger.error("Failed to prepare VNC sandbox for %s: %s", conversation_id, exc)
-        await websocket.close(code=1011, reason="Sandbox unavailable")
+        import socket as _socket
+        s = _socket.create_connection((VNC_HOST, VNC_PORT), timeout=3)
+        s.close()
+    except OSError as exc:
+        logger.error("VNC port %s:%d not reachable: %s", VNC_HOST, VNC_PORT, exc)
+        await websocket.close(code=1011, reason="VNC service unavailable")
         return
 
-    # noVNC 旧版本会请求 "binary" 子协议；新版本默认不带 subprotocol。
-    # 如果客户端未声明支持的 subprotocol，服务端强行选择会触发浏览器立刻断开连接。
+    # 接受 WebSocket 连接
     offered_protocols = websocket.headers.get("sec-websocket-protocol", "")
     offered = {p.strip().lower() for p in offered_protocols.split(",") if p.strip()}
     if "binary" in offered:
@@ -186,9 +211,82 @@ async def vnc_relay(websocket: WebSocket, conversation_id: str):
     else:
         await websocket.accept()
 
-    container_name = sandbox.container_name
+    logger.info("VNC local relay connected: conversation=%s -> %s:%d", conversation_id, VNC_HOST, VNC_PORT)
 
-    # 启动 docker exec 桥接进程
+    try:
+        # 建立到 VNC 服务的 TCP 连接
+        reader, writer = await asyncio.open_connection(VNC_HOST, VNC_PORT)
+    except Exception as exc:
+        logger.error("Failed to connect to VNC %s:%d: %s", VNC_HOST, VNC_PORT, exc)
+        await websocket.close(code=1011, reason="VNC connect failed")
+        return
+
+    async def ws_to_vnc():
+        """WebSocket → VNC TCP"""
+        try:
+            while True:
+                msg = await websocket.receive()
+                if msg.get("type") == "websocket.disconnect":
+                    break
+                data = msg.get("bytes") or (msg.get("text", "").encode() if msg.get("text") else None)
+                if data:
+                    writer.write(data)
+                    await writer.drain()
+        except (WebSocketDisconnect, Exception) as e:
+            logger.debug("ws_to_vnc ended: %s", e)
+        finally:
+            try:
+                writer.close()
+            except Exception:
+                pass
+
+    async def vnc_to_ws():
+        """VNC TCP → WebSocket"""
+        try:
+            while True:
+                data = await reader.read(65536)
+                if not data:
+                    break
+                if websocket.client_state == WebSocketState.CONNECTED:
+                    await websocket.send_bytes(data)
+                else:
+                    break
+        except (WebSocketDisconnect, Exception) as e:
+            logger.debug("vnc_to_ws ended: %s", e)
+
+    task_ws = asyncio.create_task(ws_to_vnc())
+    task_vnc = asyncio.create_task(vnc_to_ws())
+
+    try:
+        done, pending = await asyncio.wait(
+            [task_ws, task_vnc],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for t in pending:
+            t.cancel()
+    finally:
+        try:
+            writer.close()
+            await writer.wait_closed()
+        except Exception:
+            pass
+        try:
+            if websocket.client_state == WebSocketState.CONNECTED:
+                await websocket.close()
+        except Exception:
+            pass
+        logger.info("VNC local relay disconnected: conversation=%s", conversation_id)
+
+
+async def _relay_via_docker(websocket: WebSocket, container_name: str, conversation_id: str):
+    """Docker 模式：WebSocket ↔ docker exec ↔ VNC TCP"""
+    offered_protocols = websocket.headers.get("sec-websocket-protocol", "")
+    offered = {p.strip().lower() for p in offered_protocols.split(",") if p.strip()}
+    if "binary" in offered:
+        await websocket.accept(subprotocol="binary")
+    else:
+        await websocket.accept()
+
     try:
         proc = await asyncio.create_subprocess_exec(
             "docker", "exec", "-i", container_name,
@@ -202,10 +300,9 @@ async def vnc_relay(websocket: WebSocket, conversation_id: str):
         await websocket.close(code=1011, reason="Bridge start failed")
         return
 
-    logger.info("VNC relay connected: conversation=%s container=%s", conversation_id, container_name)
+    logger.info("VNC docker relay connected: conversation=%s container=%s", conversation_id, container_name)
 
     async def ws_to_proc():
-        """WebSocket → docker exec stdin"""
         try:
             while True:
                 msg = await websocket.receive()
@@ -222,7 +319,6 @@ async def vnc_relay(websocket: WebSocket, conversation_id: str):
                 proc.stdin.close()
 
     async def proc_to_ws():
-        """docker exec stdout → WebSocket"""
         try:
             while True:
                 data = await proc.stdout.read(65536)
@@ -235,7 +331,6 @@ async def vnc_relay(websocket: WebSocket, conversation_id: str):
         except (WebSocketDisconnect, Exception) as e:
             logger.debug("proc_to_ws ended: %s", e)
 
-    # 读取 stderr 用于调试
     async def log_stderr():
         try:
             while True:
@@ -259,7 +354,6 @@ async def vnc_relay(websocket: WebSocket, conversation_id: str):
             t.cancel()
         task_err.cancel()
     finally:
-        # 清理
         try:
             proc.kill()
         except Exception:
@@ -269,4 +363,4 @@ async def vnc_relay(websocket: WebSocket, conversation_id: str):
                 await websocket.close()
         except Exception:
             pass
-        logger.info("VNC relay disconnected: conversation=%s", conversation_id)
+        logger.info("VNC docker relay disconnected: conversation=%s", conversation_id)
