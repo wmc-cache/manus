@@ -26,6 +26,14 @@ logger = logging.getLogger(__name__)
 # 是否启用 MCP 模式（通过环境变量控制，便于灰度切换）
 _USE_MCP = os.environ.get("MANUS_USE_MCP", "true").strip().lower() in ("1", "true", "yes")
 
+# 需要在本地执行的工具列表（这些工具依赖本地 Playwright/browser_service，不适合走 MCP 微服务）
+_LOCAL_ONLY_TOOLS = {
+    "browser_navigate", "browser_screenshot", "browser_get_content",
+    "browser_click", "browser_input", "browser_scroll",
+    # 以下工具依赖本地 Agent 上下文（如 sub_agent、conversation_store 等）
+    "spawn_sub_agents", "wide_research", "data_analysis",
+}
+
 # ---------------------------------------------------------------------------
 # MCP 工具定义（与 LLM 的 Function Calling 格式兼容）
 # 这些定义用于在 Agent 的系统提示中告知 LLM 可用工具
@@ -303,6 +311,11 @@ async def execute_tool(
     - 若 MANUS_USE_MCP=true，通过 MCP 客户端调用对应微服务。
     - 否则，回退到原有本地工具执行（兼容模式）。
     """
+    # 浏览器工具和依赖本地上下文的工具始终走本地执行
+    if name in _LOCAL_ONLY_TOOLS:
+        logger.debug("[tools_mcp] 工具 %s 走本地执行路径", name)
+        return await _execute_local(name, arguments, conversation_id)
+
     if _USE_MCP:
         return await _execute_via_mcp(name, arguments, conversation_id)
     else:
