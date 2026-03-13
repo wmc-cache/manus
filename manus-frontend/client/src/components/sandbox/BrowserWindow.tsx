@@ -1,11 +1,14 @@
 /**
  * BrowserWindow - 浏览器窗口组件
- * 展示 Agent 浏览网页的实时截图
- * 
+ * 展示 Agent 浏览器的实时 VNC 画面
+ *
  * 风格: Chrome 风格 + 毛玻璃 + 地址栏
  */
-import { Globe, RefreshCw, Lock, ExternalLink } from "lucide-react";
-import { useRef, useState } from "react";
+import { Globe, RefreshCw, Lock, ExternalLink, Loader2, WifiOff } from "lucide-react";
+import { useMemo, useState, useCallback } from "react";
+import VncViewer, { type VncStatus } from "./VncViewer";
+
+const API_TOKEN = (import.meta.env.VITE_MANUS_API_TOKEN || "").trim();
 
 interface BrowserWindowProps {
   data: {
@@ -14,6 +17,7 @@ interface BrowserWindowProps {
     screenshot: string; // base64
     status?: number;
   } | null;
+  conversationId?: string;
   onPageClick?: (x: number, y: number, viewportWidth: number, viewportHeight: number) => void;
   onTypeText?: (text: string, submit?: boolean) => void;
   onNavigate?: (url: string) => void;
@@ -24,63 +28,27 @@ interface BrowserWindowProps {
 
 export default function BrowserWindow({
   data,
-  onPageClick,
-  onTypeText,
-  onNavigate,
-  onScrollPage,
-  onPressKey,
+  conversationId,
   interactionError,
 }: BrowserWindowProps) {
-  const screenshotRef = useRef<HTMLImageElement | null>(null);
-  const [typingText, setTypingText] = useState("");
+  const [vncStatus, setVncStatus] = useState<VncStatus>("connecting");
 
-  const normalizeManualUrl = (raw: string): string | null => {
-    const value = raw.trim();
-    if (!value || /\s/.test(value)) return null;
+  const wsUrl = useMemo(() => {
+    if (!conversationId) return "";
+    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const host = window.location.host;
+    const tokenParam = API_TOKEN ? `?token=${encodeURIComponent(API_TOKEN)}` : "";
+    return `${proto}//${host}/ws/vnc/${conversationId}${tokenParam}`;
+  }, [conversationId]);
 
-    const hasScheme = /^[a-zA-Z][a-zA-Z\d+\-.]*:\/\//.test(value);
-    const looksLikeHost =
-      /^localhost(?::\d+)?(?:\/.*)?$/i.test(value) ||
-      /^\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?(?:\/.*)?$/.test(value) ||
-      /^(?:[\w-]+\.)+[\w-]{2,}(?::\d+)?(?:\/.*)?$/i.test(value);
-    if (!hasScheme && !looksLikeHost) return null;
+  const handleVncStatusChange = useCallback((status: VncStatus) => {
+    setVncStatus(status);
+  }, []);
 
-    return hasScheme ? value : `https://${value}`;
-  };
-
-  const handlePrimaryAction = () => {
-    const text = typingText.trim();
-    if (!text) return;
-
-    const normalizedUrl = onNavigate ? normalizeManualUrl(text) : null;
-    if (normalizedUrl) {
-      onNavigate?.(normalizedUrl);
-      setTypingText("");
-      return;
-    }
-    if (!onTypeText) return;
-    onTypeText(text, false);
-    setTypingText("");
-  };
-
-  const hasInput = Boolean(typingText.trim());
-  const isUrlInput = Boolean(onNavigate && normalizeManualUrl(typingText));
-  const primaryButtonLabel = isUrlInput ? "访问" : "输入";
-  const primaryButtonTitle = isUrlInput ? "访问该地址" : "输入到当前焦点元素";
-
-  if (!data) {
-    return (
-      <div className="h-full flex items-center justify-center bg-[oklch(0.1_0.01_260)] rounded-lg">
-        <div className="text-center text-muted-foreground/50">
-          <Globe className="w-12 h-12 mx-auto mb-3 opacity-30" />
-          <p className="text-sm">等待 Agent 打开网页...</p>
-        </div>
-      </div>
-    );
-  }
-
-  const isLoading = data.title === "加载中...";
-  const isHttps = data.url.startsWith("https://");
+  const isLoading = data?.title === "加载中...";
+  const currentUrl = data?.url || "";
+  const currentTitle = data?.title || "浏览器";
+  const isHttps = currentUrl.startsWith("https://");
 
   return (
     <div className="h-full flex flex-col bg-[oklch(0.1_0.01_260)] rounded-lg overflow-hidden">
@@ -96,7 +64,7 @@ export default function BrowserWindow({
         <div className="flex items-center gap-1 ml-3 px-3 py-1 rounded-t-lg bg-[oklch(0.16_0.014_260)] border border-b-0 border-border/20 max-w-[200px]">
           <Globe className="w-3 h-3 text-muted-foreground flex-shrink-0" />
           <span className="text-xs text-foreground/80 truncate">
-            {data.title || "新标签页"}
+            {currentTitle}
           </span>
         </div>
       </div>
@@ -114,13 +82,13 @@ export default function BrowserWindow({
         <div className="flex-1 flex items-center gap-1.5 px-3 py-1 rounded-md bg-[oklch(0.16_0.014_260)] border border-border/15">
           {isHttps && <Lock className="w-3 h-3 text-emerald-400/70 flex-shrink-0" />}
           <span className="text-xs text-muted-foreground font-mono truncate">
-            {data.url}
+            {currentUrl || "等待 Agent 打开网页..."}
           </span>
         </div>
 
-        {data.url && (
+        {currentUrl && (
           <a
-            href={data.url}
+            href={currentUrl}
             target="_blank"
             rel="noopener noreferrer"
             className="p-1 rounded hover:bg-accent/30 transition-colors"
@@ -130,72 +98,38 @@ export default function BrowserWindow({
         )}
       </div>
 
-      {/* 交互栏 */}
-      {/* <div className="flex items-center gap-2 px-3 py-1.5 bg-[oklch(0.12_0.012_260)] border-b border-border/20">
-        <input
-          value={typingText}
-          onChange={(e) => setTypingText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              handlePrimaryAction();
-            }
-          }}
-          disabled={!onNavigate && !onTypeText}
-          placeholder="输入 URL 访问，或先点页面元素后输入文本"
-          className="flex-1 h-7 rounded px-2 text-xs bg-[oklch(0.16_0.014_260)] border border-border/20 outline-none disabled:opacity-60"
-        />
-
-        <button
-          onClick={handlePrimaryAction}
-          disabled={!hasInput || (!onNavigate && !onTypeText)}
-          title={primaryButtonTitle}
-          className="h-7 px-2 text-[10px] rounded bg-primary/20 text-primary disabled:opacity-40"
-        >
-          {primaryButtonLabel}
-        </button>
-        <button
-          onClick={() => onPressKey?.("Enter")}
-          disabled={!onPressKey}
-          className="h-7 px-2 text-[10px] rounded bg-primary/20 text-primary disabled:opacity-40"
-        >
-          Enter
-        </button>
-      </div> */}
-
-      {/* 页面截图 */}
-      <div
-        className="flex-1 overflow-auto bg-white"
-        onWheel={(e) => {
-          if (!onScrollPage) return;
-          e.preventDefault();
-          onScrollPage(e.deltaY);
-        }}
-      >
-        {data.screenshot ? (
-          <img
-            ref={screenshotRef}
-            src={`data:image/jpeg;base64,${data.screenshot}`}
-            alt={data.title}
-            className={`w-full h-auto ${onPageClick ? "cursor-crosshair" : "cursor-default"}`}
-            onClick={(e) => {
-              if (!onPageClick || !screenshotRef.current) return;
-              const rect = screenshotRef.current.getBoundingClientRect();
-              const x = e.clientX - rect.left;
-              const y = e.clientY - rect.top;
-              onPageClick(x, y, rect.width, rect.height);
-            }}
+      {/* 页面实时画面 */}
+      <div className="relative flex-1 overflow-hidden bg-white">
+        {wsUrl ? (
+          <VncViewer
+            url={wsUrl}
+            onStatusChange={handleVncStatusChange}
+            className="absolute inset-0"
           />
-        ) : isLoading ? (
-          <div className="h-full flex items-center justify-center bg-[oklch(0.1_0.01_260)]">
-            <div className="text-center">
-              <RefreshCw className="w-8 h-8 mx-auto mb-2 text-primary animate-spin" />
-              <p className="text-sm text-muted-foreground">正在加载页面...</p>
-            </div>
-          </div>
         ) : (
           <div className="h-full flex items-center justify-center bg-[oklch(0.1_0.01_260)]">
-            <p className="text-sm text-muted-foreground">无截图</p>
+            <div className="text-center text-muted-foreground/50">
+              <Globe className="w-12 h-12 mx-auto mb-3 opacity-30" />
+              <p className="text-sm">等待对话初始化浏览器...</p>
+            </div>
+          </div>
+        )}
+
+        {vncStatus === "connecting" && wsUrl && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black/35 pointer-events-none">
+            <div className="flex items-center gap-2 text-white/85">
+              <Loader2 className="w-5 h-5 animate-spin" />
+              <span className="text-sm">{isLoading ? "正在打开网页..." : "正在连接实时画面..."}</span>
+            </div>
+          </div>
+        )}
+
+        {(vncStatus === "disconnected" || vncStatus === "error") && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black/50 pointer-events-none">
+            <div className="flex items-center gap-2 text-red-300">
+              <WifiOff className="w-5 h-5" />
+              <span className="text-sm">{vncStatus === "error" ? "实时画面连接失败" : "实时画面已断开"}</span>
+            </div>
           </div>
         )}
       </div>
@@ -207,7 +141,7 @@ export default function BrowserWindow({
       )}
 
       {/* 状态栏 */}
-      {data.status !== undefined && data.status > 0 && (
+      {data?.status !== undefined && data.status > 0 && (
         <div className="flex items-center gap-2 px-3 py-1 bg-[oklch(0.12_0.012_260)] border-t border-border/20">
           <div
             className={`w-1.5 h-1.5 rounded-full ${

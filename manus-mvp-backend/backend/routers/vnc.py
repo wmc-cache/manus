@@ -19,6 +19,59 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 ENSURE_DESKTOP_COMMAND = """
+set -e
+
+wait_for_display() {
+python3 - <<'PY'
+import os
+import subprocess
+import time
+
+env = dict(os.environ, DISPLAY=":99")
+deadline = time.time() + 15
+
+while time.time() < deadline:
+    result = subprocess.run(
+        ["xdpyinfo"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        env=env,
+    )
+    if result.returncode == 0:
+        raise SystemExit(0)
+    time.sleep(0.5)
+
+raise SystemExit("Xvfb display :99 not ready")
+PY
+}
+
+wait_for_vnc_port() {
+python3 - <<'PY'
+import socket
+import time
+
+deadline = time.time() + 15
+last_error = None
+
+while time.time() < deadline:
+    try:
+        s = socket.create_connection(("127.0.0.1", 5900), timeout=1)
+        s.close()
+        raise SystemExit(0)
+    except OSError as exc:
+        last_error = exc
+        time.sleep(0.5)
+
+raise SystemExit(f"VNC port 5900 not ready: {last_error}")
+PY
+}
+
+start_xvfb() {
+  pkill -f 'Xvfb :99' >/dev/null 2>&1 || true
+  rm -f /tmp/.X99-lock /tmp/.X11-unix/X99
+  nohup Xvfb :99 -screen 0 1280x800x24 -ac +extension GLX +render -noreset >/tmp/xvfb.log 2>&1 < /dev/null &
+}
+
 # 快速路径：x11vnc 已运行且端口可达
 if pgrep -f 'x11vnc .*5900' >/dev/null 2>&1; then
   python3 - <<'PY' >/dev/null 2>&1 && exit 0
@@ -32,35 +85,25 @@ pkill -x x11vnc >/dev/null 2>&1 || true
 
 # 启动 Xvfb（若未运行）
 if ! pgrep -f 'Xvfb :99' >/dev/null 2>&1; then
-  rm -f /tmp/.X99-lock /tmp/.X11-unix/X99
-  nohup Xvfb :99 -screen 0 1280x800x24 -ac +extension GLX +render -noreset >/tmp/xvfb.log 2>&1 < /dev/null &
-  sleep 3
+  start_xvfb
 fi
 
-# 确保 X11 socket 存在
-if [ ! -S /tmp/.X11-unix/X99 ]; then
-  echo "Xvfb socket missing" >&2
-  exit 1
+if ! wait_for_display; then
+  start_xvfb
+  wait_for_display
 fi
 
 export DISPLAY=:99
-pgrep -x openbox >/dev/null 2>&1 || nohup openbox >/tmp/openbox.log 2>&1 < /dev/null &
+if ! pgrep -x openbox >/dev/null 2>&1; then
+  nohup openbox >/tmp/openbox.log 2>&1 < /dev/null &
+fi
 sleep 0.5
 
-nohup x11vnc -display :99 -forever -nopw -shared -rfbport 5900 -xkb >/tmp/x11vnc.log 2>&1 < /dev/null &
+if ! pgrep -x x11vnc >/dev/null 2>&1; then
+  nohup x11vnc -display :99 -forever -nopw -shared -rfbport 5900 -xkb >/tmp/x11vnc.log 2>&1 < /dev/null &
+fi
 
-python3 - <<'PY'
-import socket, time
-deadline = time.time() + 15
-while time.time() < deadline:
-    try:
-        s = socket.create_connection(("127.0.0.1", 5900), timeout=1)
-        s.close()
-        exit(0)
-    except OSError:
-        time.sleep(0.5)
-exit(1)
-PY
+wait_for_vnc_port
 """.strip()
 
 # ---------------------------------------------------------------------------
@@ -105,7 +148,7 @@ async def _ensure_desktop_service(container_name: str):
     """确保容器内桌面服务已启动，兼容旧容器仍在运行 sleep infinity 的情况。"""
     proc = await asyncio.create_subprocess_exec(
         "docker", "exec", container_name,
-        "/bin/bash", "-lc", ENSURE_DESKTOP_COMMAND,
+        "/bin/bash", "-c", ENSURE_DESKTOP_COMMAND,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )

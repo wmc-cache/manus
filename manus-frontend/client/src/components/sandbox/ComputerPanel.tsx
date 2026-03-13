@@ -364,6 +364,7 @@ export default function ComputerPanel({
             {activeWindow === "browser" && (
               <BrowserWindow
                 data={browserData}
+                conversationId={conversationId}
                 onPageClick={onBrowserClick}
                 onTypeText={onBrowserType}
                 onNavigate={onBrowserNavigate}

@@ -15,17 +15,90 @@ logger = logging.getLogger("sandbox.browser")
 _REMOTE_BROWSER_PORT = 9222
 _REMOTE_BROWSER_PROFILE = "/tmp/manus-browser-profile"
 
-_ENSURE_DESKTOP_COMMAND = (
-    "pgrep -f 'x11vnc .*5900' >/dev/null && exit 0; "
-    "if [ -x /usr/local/bin/start-desktop.sh ]; then "
-    "  nohup /usr/local/bin/start-desktop.sh >/tmp/manus-desktop.log 2>&1 & "
-    "else "
-    "  export DISPLAY=:99; "
-    "  pgrep -f 'Xvfb :99' >/dev/null || nohup Xvfb :99 -screen 0 1280x800x24 -ac +extension GLX +render -noreset >/tmp/xvfb.log 2>&1 & "
-    "  sleep 1; "
-    "  pgrep -x x11vnc >/dev/null || nohup x11vnc -display :99 -forever -nopw -shared -rfbport 5900 -xkb >/tmp/x11vnc.log 2>&1 & "
-    "fi"
-)
+_ENSURE_DESKTOP_COMMAND = """
+set -e
+
+wait_for_display() {
+python3 - <<'PY'
+import os
+import subprocess
+import time
+
+env = dict(os.environ, DISPLAY=":99")
+deadline = time.time() + 15
+
+while time.time() < deadline:
+    result = subprocess.run(
+        ["xdpyinfo"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        env=env,
+    )
+    if result.returncode == 0:
+        raise SystemExit(0)
+    time.sleep(0.5)
+
+raise SystemExit("Xvfb display :99 not ready")
+PY
+}
+
+wait_for_vnc_port() {
+python3 - <<'PY'
+import socket
+import time
+
+deadline = time.time() + 15
+last_error = None
+
+while time.time() < deadline:
+    try:
+        s = socket.create_connection(("127.0.0.1", 5900), timeout=1)
+        s.close()
+        raise SystemExit(0)
+    except OSError as exc:
+        last_error = exc
+        time.sleep(0.5)
+
+raise SystemExit(f"VNC port 5900 not ready: {last_error}")
+PY
+}
+
+start_xvfb() {
+  pkill -f 'Xvfb :99' >/dev/null 2>&1 || true
+  rm -f /tmp/.X99-lock /tmp/.X11-unix/X99
+  nohup Xvfb :99 -screen 0 1280x800x24 -ac +extension GLX +render -noreset >/tmp/xvfb.log 2>&1 < /dev/null &
+}
+
+if pgrep -f 'x11vnc .*5900' >/dev/null 2>&1; then
+  python3 - <<'PY' >/dev/null 2>&1 && exit 0
+import socket
+s = socket.create_connection(("127.0.0.1", 5900), timeout=2)
+s.close()
+PY
+fi
+
+pkill -x x11vnc >/dev/null 2>&1 || true
+
+if ! pgrep -f 'Xvfb :99' >/dev/null 2>&1; then
+  start_xvfb
+fi
+
+if ! wait_for_display; then
+  start_xvfb
+  wait_for_display
+fi
+
+export DISPLAY=:99
+if ! pgrep -x openbox >/dev/null 2>&1; then
+  nohup openbox >/tmp/openbox.log 2>&1 < /dev/null &
+fi
+sleep 0.5
+if ! pgrep -x x11vnc >/dev/null 2>&1; then
+  nohup x11vnc -display :99 -forever -nopw -shared -rfbport 5900 -xkb >/tmp/x11vnc.log 2>&1 < /dev/null &
+fi
+
+wait_for_vnc_port
+""".strip()
 
 _DISPLAY_DISCOVERY_SNIPPET = (
     "DISPLAY_VALUE=\"$(ps -ef | sed -n 's/.*x11vnc .* -display \\(:[0-9][0-9]*\\).*/\\1/p' | head -n 1)\"\n"
@@ -140,7 +213,7 @@ class BrowserService:
         code, _, stderr = await sandbox_manager.exec_command(
             _ENSURE_DESKTOP_COMMAND,
             conversation_id=conversation_id,
-            timeout=10,
+            timeout=40,
         )
         if code != 0:
             raise RuntimeError(f"启动桌面环境失败: {stderr.strip() or 'unknown error'}")
@@ -180,6 +253,14 @@ class BrowserService:
 
         return pages[-1]
 
+    async def _activate_page(self, page: Any):
+        """将目标页面切到 Chromium 前台，保证 VNC 与截图指向同一标签页。"""
+        try:
+            await page.bring_to_front()
+            await asyncio.sleep(0.05)
+        except Exception:
+            pass
+
     async def _refresh_session_targets(self, session: BrowserSession):
         """刷新连接中的 context/page 引用。"""
         contexts = list(session.browser.contexts)
@@ -191,6 +272,7 @@ class BrowserService:
 
         session.context = contexts[0]
         session.page = await self._select_page(session.context)
+        await self._activate_page(session.page)
         session.current_url = session.page.url or session.current_url
 
     async def _create_session(self, conversation_id: Optional[str]) -> BrowserSession:
@@ -266,7 +348,9 @@ class BrowserService:
 
         async with session.lock:
             try:
+                await self._activate_page(session.page)
                 response = await session.page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                await self._refresh_session_targets(session)
                 session.current_url = session.page.url or url
                 self._current_url = session.current_url
                 title = await session.page.title()
@@ -303,6 +387,7 @@ class BrowserService:
         """获取当前页面截图。"""
         session = await self._ensure_session(conversation_id)
         async with session.lock:
+            await self._activate_page(session.page)
             screenshot_b64 = await self._take_screenshot(session)
             title = await session.page.title()
             url = session.current_url or session.page.url or ""
@@ -333,6 +418,7 @@ class BrowserService:
 
         async with session.lock:
             try:
+                await self._activate_page(session.page)
                 content = await session.page.evaluate("document.body.innerText")
                 if len(content) > 5000:
                     content = content[:5000] + "\n... [内容被截断]"
