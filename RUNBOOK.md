@@ -1,8 +1,6 @@
 # Manus AI Agent MVP 运行手册
 
-**版本**: `v0.3.0` (基于 `main` 分支)
-**作者**: Manus AI
-**日期**: 2026-03-14
+**版本**: `v0.3.0` (基于 `main` 分支)**作者**: Manus AI**日期**: 2026-03-14
 
 ---
 
@@ -15,12 +13,12 @@
 系统由以下核心组件构成：
 
 | 组件 | 技术栈 | 端口 | 职责 |
-|------|--------|------|------|
+| --- | --- | --- | --- |
 | **前端** | React 19 + TypeScript + Vite + TailwindCSS | `3000` | 用户交互界面，包含对话、终端、编辑器、浏览器、VNC 面板 |
 | **后端** | Python 3.11 + FastAPI + Uvicorn | `8000` | Agent 核心逻辑：对话管理、任务规划、LLM 调用、工具路由 |
 | **mcp-filesystem** | Python + FastAPI | `8101` | 文件系统工具服务（read_file, write_file, list_files 等） |
 | **mcp-execution** | Python + FastAPI | `8102` | 代码与命令执行服务（shell_exec, execute_code, expose_port） |
-| **mcp-research** | Python + FastAPI | `8104` | 搜索与研究服务（web_search, wide_research） |
+| **mcp-research** | Python + Fas | `8104` | 搜索与研究服务（web_search, wide_research） |
 | **Chromium CDP** | Chromium + Playwright | `9222` | 浏览器自动化，Agent 通过 CDP 协议控制浏览器 |
 | **VNC 桌面** | Xvfb + x11vnc + openbox | `5900` | 沙箱虚拟桌面，前端计算机面板实时显示 |
 
@@ -29,7 +27,7 @@
 Agent 执行工具时采用**混合路由策略**，兼顾模块化与性能：
 
 | 工具类别 | 工具名称 | 执行路径 | 原因 |
-|----------|----------|----------|------|
+| --- | --- | --- | --- |
 | 文件系统 | read_file, write_file, edit_file, append_file, list_files, find_files, grep_files | MCP → mcp-filesystem:8101 | 无状态，适合微服务化 |
 | 代码执行 | shell_exec, execute_code, expose_port | MCP → mcp-execution:8102 | 无状态，适合微服务化 |
 | 网页搜索 | web_search | MCP → mcp-research:8104 | 无状态，适合微服务化 |
@@ -61,7 +59,7 @@ Agent 执行工具时采用**混合路由策略**，兼顾模块化与性能：
 ### 2.1. 系统要求
 
 | 项目 | 最低要求 |
-|------|----------|
+| --- | --- |
 | 操作系统 | Ubuntu 22.04 / Debian 12 / macOS 13+ |
 | Python | 3.11+ |
 | Node.js | 22.x+ |
@@ -100,11 +98,11 @@ cd manus
 
 ## 3. 配置
 
-### 3.1. 环境变量（.env）
+### 3.1. 环境变量（.env ）
 
 在 `manus-mvp-backend/backend/` 目录下创建 `.env` 文件：
 
-```env
+```
 # ============================================================
 # LLM API 配置（必须，至少配置一个）
 # ============================================================
@@ -113,7 +111,7 @@ CLAUDE_BASE_URL=https://api.anthropic.com
 CLAUDE_MODEL=claude-sonnet-4-20250514
 
 # ============================================================
-# 搜索 API（可选，web_search 工具需要）
+# 搜索 API（可选  ，web_search 工具需要）
 # ============================================================
 TAVILY_API_KEY=tvly-xxx-your-tavily-key
 
@@ -125,10 +123,10 @@ TAVILY_API_KEY=tvly-xxx-your-tavily-key
 
 ### 3.2. 运行模式环境变量
 
-以下环境变量在启动后端时通过命令行传入（不写在 `.env` 中）：
+以下环境变量在启动后端时通过命令行传入（不写在 `.env` 中 ）：
 
 | 环境变量 | 默认值 | 说明 |
-|----------|--------|------|
+| --- | --- | --- |
 | `MANUS_USE_MCP` | `true` | 是否启用 MCP 微服务模式（`false` 则所有工具本地执行） |
 | `MANUS_USE_DOCKER` | `false` | 是否使用 Docker 沙箱（`false` 则直接使用本机环境） |
 | `DISPLAY` | `:1` | X11 显示器编号，Chromium 和 VNC 使用 |
@@ -136,9 +134,9 @@ TAVILY_API_KEY=tvly-xxx-your-tavily-key
 | `VNC_PORT` | `5900` | VNC 服务端口 |
 | `MCP_FILESYSTEM_URL` | `http://localhost:8101` | mcp-filesystem 服务地址 |
 | `MCP_EXECUTION_URL` | `http://localhost:8102` | mcp-execution 服务地址 |
-| `MCP_BROWSER_URL` | `http://localhost:8103` | mcp-browser 服务地址（当前未使用，浏览器走本地） |
+| `MCP_BROWSER_URL` | `http://localhost:8103` | mcp-browser 服务地址（当前未使用 ，浏览器走本地） |
 | `MCP_RESEARCH_URL` | `http://localhost:8104` | mcp-research 服务地址 |
-| `MCP_REQUEST_TIMEOUT` | `120` | MCP 服务请求超时时间（秒） |
+| `MCP_REQUEST_TIMEOUT` | `120` | MCP 服务请求超时时间（秒 ） |
 
 ---
 
@@ -167,7 +165,7 @@ playwright install chromium
 **后端核心依赖清单：**
 
 | 包名 | 版本 | 用途 |
-|------|------|------|
+| --- | --- | --- |
 | `fastapi` | >=0.104.0 | Web 框架 |
 | `uvicorn` | >=0.24.0 | ASGI 服务器 |
 | `websockets` | >=12.0 | WebSocket 支持（VNC 代理） |
@@ -190,7 +188,7 @@ cd ../..
 
 ## 5. 启动服务
 
-### 方式一：分步手动启动（推荐调试时使用）
+### 方式一：分步手动启动（推荐调试时使用 ）
 
 按以下顺序在**不同的终端窗口**中依次启动各服务。
 
@@ -266,7 +264,7 @@ npm run dev
 
 ### 方式二：使用 start-dev.sh 脚本
 
-项目根目录提供了 `start-dev.sh` 脚本，可一键启动后端和前端（不含 MCP 服务和 VNC）：
+项目根目录提供了 `start-dev.sh` 脚本 ，可一键启动后端和前端（不含 MCP 服务和 VNC）：
 
 ```bash
 chmod +x start-dev.sh
@@ -310,7 +308,7 @@ curl -s http://localhost:8000/api/health && echo ""
 
 # MCP 服务
 for port in 8101 8102 8104; do
-  status=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:$port/health)
+  status=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:$port/health  )
   echo "MCP 服务  :$port  HTTP $status"
 done
 
@@ -335,7 +333,7 @@ MCP 服务  :8104  HTTP 200
 ### 6.2. 日志位置
 
 | 服务 | 日志文件 |
-|------|----------|
+| --- | --- |
 | 后端 | `/tmp/backend.log` 或 `.run/logs/backend.log` |
 | 前端 | `.run/logs/frontend.log` |
 | mcp-filesystem | `/tmp/mcp-filesystem.log` |
@@ -349,17 +347,17 @@ MCP 服务  :8104  HTTP 200
 
 ## 7. 访问与使用
 
-启动所有服务后，打开浏览器访问：
+启动所有服务后 ，打开浏览器访问：
 
-```
+```html
 http://localhost:3000
 ```
 
 界面包含以下功能区域：
 
 | 区域 | 说明 |
-|------|------|
-| **对话面板**（左侧） | 与 Agent 进行自然语言对话，发送任务指令 |
+| --- | --- |
+| **对话面板**（左侧 ） | 与 Agent 进行自然语言对话，发送任务指令 |
 | **计算机面板**（右侧） | 包含终端、编辑器、浏览器三个标签页 |
 | **VNC 面板** | 点击右上角"VNC"按钮，实时查看沙箱桌面画面 |
 
@@ -403,32 +401,42 @@ docker compose -f docker/docker-compose.mcp.yml down
 **原因**：Chromium 未在本机启动，或 CDP 端口 9222 不可用。
 
 **解决**：
+
 1. 确认 Chromium 已安装：`which chromium-browser`
-2. 确认 CDP 端口可用：`curl -s http://127.0.0.1:9222/json/version`
-3. 如果端口不通，手动启动 Chromium（参考步骤 2）
+
+1. 确认 CDP 端口可用：`curl -s http://127.0.0.1:9222/json/version`
+
+1. 如果端口不通 ，手动启动 Chromium（参考步骤 2）
 
 ### Q2: VNC 计算机面板显示"远程画面已断开"
 
 **原因**：VNC 服务未启动，或后端的 `VNC_HOST`/`VNC_PORT` 配置不正确。
 
 **解决**：
+
 1. 确认 x11vnc 正在运行：`pgrep -a x11vnc`
-2. 确认端口 5900 可连接：`python3 -c "import socket; s=socket.create_connection(('127.0.0.1',5900),1); s.close(); print('OK')"`
-3. 确认后端启动时设置了 `VNC_HOST=localhost VNC_PORT=5900`
+
+1. 确认端口 5900 可连接：`python3 -c "import socket; s=socket.create_connection(('127.0.0.1',5900),1); s.close(); print('OK')"`
+
+1. 确认后端启动时设置了 `VNC_HOST=localhost VNC_PORT=5900`
 
 ### Q3: MCP 服务连接失败
 
 **原因**：MCP 微服务未启动，或端口被占用。
 
 **解决**：
+
 1. 检查服务健康状态：`curl http://localhost:8101/health`
-2. 检查端口占用：`ss -tlnp | grep 810`
-3. 查看日志：`cat /tmp/mcp-filesystem.log`
-4. 临时回退到本地模式：设置 `MANUS_USE_MCP=false` 重启后端
+
+1. 检查端口占用：`ss -tlnp | grep 810`
+
+1. 查看日志：`cat /tmp/mcp-filesystem.log`
+
+1. 临时回退到本地模式：设置 `MANUS_USE_MCP=false` 重启后端
 
 ### Q4: web_search 工具返回空结果
 
-**原因**：未配置 Tavily API Key。
+**原因**：未配置 Tavily API Key 。
 
 **解决**：在 `.env` 文件中添加 `TAVILY_API_KEY=tvly-xxx`，然后重启后端和 mcp-research 服务。
 
@@ -503,3 +511,4 @@ manus/
 ├── start-dev.sh                # 开发环境启动脚本
 └── RUNBOOK.md                  # 本文档
 ```
+
