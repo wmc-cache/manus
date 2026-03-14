@@ -89,16 +89,6 @@ export default function TerminalWindow({
       }
     });
 
-    // 用户在终端中输入时，发送到后端 PTY
-    term.onData((data) => {
-      onInput?.(data);
-    });
-
-    // 终端尺寸变化时通知后端
-    term.onResize(({ cols, rows }) => {
-      onResize?.(cols, rows);
-    });
-
     termRef.current = term;
     fitAddonRef.current = fitAddon;
     initializedRef.current = true;
@@ -135,14 +125,20 @@ export default function TerminalWindow({
     onResizeRef.current = onResize;
   }, [onInput, onResize]);
 
-  // 重新绑定 onData（因为闭包捕获了旧的 onInput）
+  // 绑定 onData 和 onResize（通过 ref 保持回调最新，只绑定一次）
   useEffect(() => {
     const term = termRef.current;
     if (!term) return;
-    const disposable = term.onData((data) => {
+    const dataDisposable = term.onData((data) => {
       onInputRef.current?.(data);
     });
-    return () => disposable.dispose();
+    const resizeDisposable = term.onResize(({ cols, rows }) => {
+      onResizeRef.current?.(cols, rows);
+    });
+    return () => {
+      dataDisposable.dispose();
+      resizeDisposable.dispose();
+    };
   }, []);
 
   // ── 增量写入 output 到 xterm ──────────────────────────
