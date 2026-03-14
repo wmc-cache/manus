@@ -54,6 +54,8 @@ const TOOL_ICON_MAP: Record<string, React.ElementType> = {
   data_analysis: BarChart3,
 };
 
+const INLINE_IMAGE_TAG_RE = /\[IMAGE:(data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+)\]/g;
+
 /** 简化 URL 显示 */
 function simplifyUrl(url: string): string {
   try {
@@ -191,6 +193,17 @@ function extractFileName(path: string): string {
   return name;
 }
 
+function parseToolResult(resultText: string): { text: string; images: string[] } {
+  if (!resultText) {
+    return { text: "", images: [] };
+  }
+
+  const images = Array.from(resultText.matchAll(INLINE_IMAGE_TAG_RE), (match) => match[1]);
+  const text = resultText.replace(INLINE_IMAGE_TAG_RE, "").trim();
+
+  return { text, images };
+}
+
 interface ToolCallCardProps {
   toolCall: ToolCall;
 }
@@ -207,6 +220,7 @@ export default function ToolCallCard({ toolCall }: ToolCallCardProps) {
     : toolCall.result === undefined || toolCall.result === null
       ? ""
       : JSON.stringify(toolCall.result, null, 2);
+  const parsedResult = parseToolResult(resultText);
 
   const argsJson = (() => {
     try {
@@ -289,14 +303,28 @@ export default function ToolCallCard({ toolCall }: ToolCallCardProps) {
               </div>
 
               {/* 结果 */}
-              {resultText && (
+              {(parsedResult.text || parsedResult.images.length > 0) && (
                 <div className="px-3 py-2 border-t border-border/20">
                   <p className="text-[10px] text-muted-foreground/60 uppercase tracking-wider mb-1">结果</p>
-                  <pre className="text-[11px] bg-black/20 rounded-md p-2 overflow-x-auto font-mono text-foreground/70 max-h-48 overflow-y-auto whitespace-pre-wrap leading-relaxed">
-                    {resultText.length > 2000
-                      ? resultText.slice(0, 2000) + "\n... [已截断]"
-                      : resultText}
-                  </pre>
+                  {parsedResult.text && (
+                    <pre className="text-[11px] bg-black/20 rounded-md p-2 overflow-x-auto font-mono text-foreground/70 max-h-48 overflow-y-auto whitespace-pre-wrap leading-relaxed">
+                      {parsedResult.text.length > 2000
+                        ? parsedResult.text.slice(0, 2000) + "\n... [已截断]"
+                        : parsedResult.text}
+                    </pre>
+                  )}
+                  {parsedResult.images.length > 0 && (
+                    <div className={`${parsedResult.text ? "mt-2" : ""} space-y-2`}>
+                      {parsedResult.images.map((src, index) => (
+                        <img
+                          key={`${toolCall.id || toolCall.name}-image-${index}`}
+                          src={src}
+                          alt={`${toolName} 结果截图 ${index + 1}`}
+                          className="block max-w-full rounded-md border border-border/30 bg-black/20"
+                        />
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
             </div>

@@ -17,6 +17,7 @@ tools_mcp.py — MCP 工具执行适配器
 """
 
 import asyncio
+import json
 import logging
 import os
 from typing import Any, Dict, List, Optional
@@ -25,6 +26,13 @@ logger = logging.getLogger(__name__)
 
 # 是否启用 MCP 模式（通过环境变量控制，便于灰度切换）
 _USE_MCP = os.environ.get("MANUS_USE_MCP", "true").strip().lower() in ("1", "true", "yes")
+_BROWSER_TOOL_NAMES = {
+    "browser_navigate",
+    "browser_screenshot",
+    "browser_click",
+    "browser_input",
+    "browser_scroll",
+}
 
 # 需要在本地执行的工具列表（这些工具依赖本地 Playwright/browser_service，不适合走 MCP 微服务）
 _LOCAL_ONLY_TOOLS = {
@@ -194,14 +202,15 @@ MCP_TOOL_DEFINITIONS: List[Dict] = [
     },
     {
         "name": "browser_input",
-        "description": "在指定输入框中填入文本",
+        "description": "在指定输入框或当前焦点元素中输入文本",
         "parameters": {
             "type": "object",
             "properties": {
-                "selector": {"type": "string", "description": "输入框的 CSS 选择器"},
                 "text":     {"type": "string", "description": "要输入的文本内容"},
+                "selector": {"type": "string", "description": "输入框的 CSS 选择器；不传时输入到当前焦点元素"},
+                "submit":   {"type": "boolean", "description": "输入后是否按 Enter 提交"},
             },
-            "required": ["selector", "text"],
+            "required": ["text"],
         },
     },
     {
@@ -340,11 +349,107 @@ async def _execute_via_mcp(
             sys.path.insert(0, mcp_shared_path)
 
         from mcp_client import mcp_client
+        if name == "browser_navigate":
+            await _publish_browser_event(
+                "browser_navigating",
+                {"url": arguments.get("url", "")},
+                conversation_id,
+            )
         result = await mcp_client.execute_tool(name, arguments, conversation_id)
+        if name in _BROWSER_TOOL_NAMES:
+            return await _handle_browser_tool_result(name, arguments, result, conversation_id)
         return result
     except ImportError:
         logger.warning("[tools_mcp] 无法导入 mcp_client，回退到本地执行")
         return await _execute_local(name, arguments, conversation_id)
+    except Exception as e:
+        if name in _BROWSER_TOOL_NAMES:
+            await _publish_browser_event(
+                "browser_error",
+                {"action": name, "error": str(e)},
+                conversation_id,
+            )
+        return f"MCP 工具执行失败: {e}"
+
+
+async def _publish_browser_event(
+    event_type: str,
+    data: Dict[str, Any],
+    conversation_id: Optional[str],
+) -> None:
+    """向前端浏览器窗口广播兼容旧实现的 sandbox 事件。"""
+    try:
+        from sandbox.event_bus import SandboxEvent, event_bus
+
+        await event_bus.publish(
+            SandboxEvent(
+                event_type,
+                data,
+                window_id="browser",
+                conversation_id=conversation_id,
+            )
+        )
+    except Exception:
+        logger.exception("[tools_mcp] 发布浏览器事件失败: %s", event_type)
+
+
+async def _handle_browser_tool_result(
+    name: str,
+    arguments: Dict[str, Any],
+    raw_result: str,
+    conversation_id: Optional[str],
+) -> str:
+    """解析 mcp-browser 的 JSON 结果，并同步为前端可消费的 sandbox 事件。"""
+    try:
+        payload = json.loads(raw_result)
+    except json.JSONDecodeError:
+        return raw_result
+
+    if not isinstance(payload, dict):
+        return raw_result
+
+    if not payload.get("ok", False):
+        await _publish_browser_event(
+            "browser_error",
+            {
+                "action": payload.get("action") or name,
+                "error": payload.get("error") or payload.get("message") or "unknown error",
+                "url": payload.get("url") or arguments.get("url", ""),
+            },
+            conversation_id,
+        )
+        return str(payload.get("message") or raw_result)
+
+    event_data = {
+        "url": payload.get("url", ""),
+        "title": payload.get("title", ""),
+        "screenshot": payload.get("screenshot", ""),
+    }
+    if payload.get("status") is not None:
+        event_data["status"] = payload["status"]
+
+    if name == "browser_navigate":
+        await _publish_browser_event("browser_navigated", event_data, conversation_id)
+    elif name == "browser_screenshot":
+        await _publish_browser_event("browser_screenshot", event_data, conversation_id)
+    elif name == "browser_click":
+        click_event_data = dict(event_data)
+        if "selector" in payload:
+            click_event_data["selector"] = payload["selector"]
+        if "x" in payload:
+            click_event_data["x"] = payload["x"]
+        if "y" in payload:
+            click_event_data["y"] = payload["y"]
+        await _publish_browser_event("browser_clicked", click_event_data, conversation_id)
+    else:
+        await _publish_browser_event("browser_screenshot", event_data, conversation_id)
+
+    message = str(payload.get("message") or raw_result)
+    screenshot = payload.get("screenshot")
+    mime_type = str(payload.get("mime_type") or "image/jpeg")
+    if name == "browser_screenshot" and screenshot:
+        return f"{message}\n[IMAGE:data:{mime_type};base64,{screenshot}]"
+    return message
 
 
 async def _execute_local(

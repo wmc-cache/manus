@@ -6,10 +6,11 @@ mcp-browser: 浏览器操作 MCP 服务
 
 import asyncio
 import base64
+import json
 import logging
 import os
 import sys
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 import uvicorn
 
@@ -37,6 +38,13 @@ async def _get_playwright():
     if _playwright_instance is None:
         from playwright.async_api import async_playwright
         _playwright_instance = await async_playwright().start()
+    needs_launch = _browser_instance is None
+    if not needs_launch:
+        try:
+            needs_launch = not _browser_instance.is_connected()
+        except Exception:
+            needs_launch = True
+    if needs_launch:
         _browser_instance = await _playwright_instance.chromium.launch(
             headless=True,
             args=[
@@ -54,7 +62,8 @@ async def _get_page(conversation_id: Optional[str]) -> object:
     """获取或创建指定会话的浏览器页面"""
     cid = conversation_id or "_default"
     async with _pool_lock:
-        if cid not in _page_pool:
+        page = _page_pool.get(cid)
+        if page is None or page.is_closed():
             browser = await _get_playwright()
             context = await browser.new_context(
                 viewport={"width": 1280, "height": 800},
@@ -66,7 +75,51 @@ async def _get_page(conversation_id: Optional[str]) -> object:
             page = await context.new_page()
             _page_pool[cid] = page
             logger.info("[mcp-browser] 为会话 %s 创建新页面", cid)
-        return _page_pool[cid]
+        return page
+
+
+async def _build_browser_payload(
+    page: object,
+    message: str,
+    *,
+    action: str,
+    status: Optional[int] = None,
+    extra: Optional[Dict[str, Any]] = None,
+) -> str:
+    """构造包含截图的标准浏览器结果。"""
+    screenshot_bytes = await page.screenshot(type="jpeg", quality=70, full_page=False)
+    payload: Dict[str, Any] = {
+        "ok": True,
+        "action": action,
+        "url": page.url,
+        "title": await page.title(),
+        "screenshot": base64.b64encode(screenshot_bytes).decode("utf-8"),
+        "mime_type": "image/jpeg",
+        "message": message,
+    }
+    if status is not None:
+        payload["status"] = status
+    if extra:
+        payload.update(extra)
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _build_error_payload(
+    action: str,
+    error: Exception,
+    *,
+    message_prefix: str,
+    extra: Optional[Dict[str, Any]] = None,
+) -> str:
+    payload: Dict[str, Any] = {
+        "ok": False,
+        "action": action,
+        "error": str(error),
+        "message": f"{message_prefix}: {error}",
+    }
+    if extra:
+        payload.update(extra)
+    return json.dumps(payload, ensure_ascii=False)
 
 
 # ---------------------------------------------------------------------------
@@ -77,24 +130,32 @@ async def browser_navigate(url: str, conversation_id: Optional[str] = None) -> s
     """导航到指定 URL"""
     try:
         page = await _get_page(conversation_id)
-        await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-        title = await page.title()
+        response = await page.goto(url, wait_until="domcontentloaded", timeout=30000)
         current_url = page.url
-        return f"已导航到: {current_url}\n页面标题: {title}"
+        title = await page.title()
+        status = response.status if response else 0
+        return await _build_browser_payload(
+            page,
+            f"已导航到: {current_url}\n页面标题: {title}",
+            action="navigate",
+            status=status,
+        )
     except Exception as e:
-        return f"导航失败: {e}"
+        return _build_error_payload("navigate", e, message_prefix="导航失败", extra={"url": url})
 
 
 async def browser_screenshot(conversation_id: Optional[str] = None) -> str:
-    """对当前页面截图，返回 base64 编码的图片"""
+    """对当前页面截图，返回结构化 JSON 字符串"""
     try:
         page = await _get_page(conversation_id)
-        screenshot_bytes = await page.screenshot(type="png", full_page=False)
-        b64 = base64.b64encode(screenshot_bytes).decode("utf-8")
         current_url = page.url
-        return f"截图成功（当前页面: {current_url}）\n[IMAGE:data:image/png;base64,{b64[:100]}...（已截断）]"
+        return await _build_browser_payload(
+            page,
+            f"截图成功（当前页面: {current_url}）",
+            action="screenshot",
+        )
     except Exception as e:
-        return f"截图失败: {e}"
+        return _build_error_payload("screenshot", e, message_prefix="截图失败")
 
 
 async def browser_get_content(conversation_id: Optional[str] = None) -> str:
@@ -129,30 +190,73 @@ async def browser_click(
     """点击页面元素（通过 CSS 选择器或坐标）"""
     try:
         page = await _get_page(conversation_id)
+        extra: Dict[str, Any] = {}
         if selector:
             await page.click(selector, timeout=10000)
-            return f"已点击元素: {selector}"
+            extra["selector"] = selector
+            message = f"已点击元素: {selector}"
         elif x is not None and y is not None:
             await page.mouse.click(x, y)
-            return f"已点击坐标: ({x}, {y})"
+            extra["x"] = x
+            extra["y"] = y
+            message = f"已点击坐标: ({x}, {y})"
         else:
-            return "请提供 selector 或 (x, y) 坐标"
+            return json.dumps(
+                {
+                    "ok": False,
+                    "action": "click",
+                    "message": "请提供 selector 或 (x, y) 坐标",
+                },
+                ensure_ascii=False,
+            )
+        try:
+            await page.wait_for_load_state("domcontentloaded", timeout=5000)
+        except Exception:
+            pass
+        await asyncio.sleep(0.2)
+        return await _build_browser_payload(page, message, action="click", extra=extra)
     except Exception as e:
-        return f"点击失败: {e}"
+        return _build_error_payload(
+            "click",
+            e,
+            message_prefix="点击失败",
+            extra={"selector": selector, "x": x, "y": y},
+        )
 
 
 async def browser_input(
-    selector: str,
     text: str,
+    selector: str = "",
+    submit: bool = False,
     conversation_id: Optional[str] = None,
 ) -> str:
-    """在指定元素中输入文本"""
+    """向指定元素或当前焦点元素输入文本"""
     try:
         page = await _get_page(conversation_id)
-        await page.fill(selector, text, timeout=10000)
-        return f"已在 `{selector}` 中输入文本"
+        if selector:
+            await page.fill(selector, text, timeout=10000)
+            message = f"已在 `{selector}` 中输入文本"
+        else:
+            if text:
+                await page.keyboard.type(text, delay=10)
+            message = "已向当前焦点元素输入文本"
+        if submit:
+            await page.keyboard.press("Enter")
+            message += " 并提交"
+        await asyncio.sleep(0.1)
+        return await _build_browser_payload(
+            page,
+            message,
+            action="input",
+            extra={"selector": selector, "submit": submit},
+        )
     except Exception as e:
-        return f"输入失败: {e}"
+        return _build_error_payload(
+            "input",
+            e,
+            message_prefix="输入失败",
+            extra={"selector": selector, "submit": submit},
+        )
 
 
 async def browser_scroll(
@@ -172,10 +276,30 @@ async def browser_scroll(
         elif direction == "bottom":
             await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
         else:
-            return f"不支持的滚动方向: {direction}，支持: up/down/top/bottom"
-        return f"已向 {direction} 滚动 {amount}px"
+            return json.dumps(
+                {
+                    "ok": False,
+                    "action": "scroll",
+                    "message": f"不支持的滚动方向: {direction}，支持: up/down/top/bottom",
+                    "direction": direction,
+                    "amount": amount,
+                },
+                ensure_ascii=False,
+            )
+        await asyncio.sleep(0.1)
+        return await _build_browser_payload(
+            page,
+            f"已向 {direction} 滚动 {amount}px",
+            action="scroll",
+            extra={"direction": direction, "amount": amount},
+        )
     except Exception as e:
-        return f"滚动失败: {e}"
+        return _build_error_payload(
+            "scroll",
+            e,
+            message_prefix="滚动失败",
+            extra={"direction": direction, "amount": amount},
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -231,14 +355,15 @@ service.register_tool(
 
 service.register_tool(
     name="browser_input",
-    description="在指定输入框中填入文本",
+    description="在指定输入框或当前焦点元素中输入文本",
     parameters={
         "type": "object",
         "properties": {
-            "selector": {"type": "string", "description": "输入框的 CSS 选择器"},
             "text":     {"type": "string", "description": "要输入的文本内容"},
+            "selector": {"type": "string", "description": "输入框的 CSS 选择器；不传时输入到当前焦点元素"},
+            "submit":   {"type": "boolean", "description": "输入后是否按 Enter 提交"},
         },
-        "required": ["selector", "text"],
+        "required": ["text"],
     },
     func=browser_input,
 )
