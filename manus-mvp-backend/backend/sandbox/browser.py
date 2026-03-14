@@ -240,6 +240,8 @@ class BrowserService:
     async def _ensure_local_browser(self):
         """本地模式：确保本机 Chromium 已启动并监听 CDP 端口。"""
         import socket as _socket
+        import shutil
+        import pathlib
         # 检查 CDP 端口是否已可用
         try:
             s = _socket.create_connection(("127.0.0.1", _REMOTE_BROWSER_PORT), timeout=1)
@@ -249,34 +251,55 @@ class BrowserService:
             pass
 
         # 查找可用的 Chromium 可执行文件
-        display = os.environ.get("DISPLAY", ":1")
-        for browser_bin in ["google-chrome", "chromium-browser", "chromium"]:
-            import shutil
-            if shutil.which(browser_bin):
+        browser_bin = None
+        for bin_name in ["google-chrome", "google-chrome-stable", "chromium-browser", "chromium"]:
+            if shutil.which(bin_name):
+                browser_bin = bin_name
                 break
-        else:
-            raise RuntimeError("未找到 Chromium 可执行文件，请安装 chromium-browser")
+        if browser_bin is None:
+            raise RuntimeError("未找到 Chromium 可执行文件，请安装 google-chrome 或 chromium-browser")
 
-        import pathlib
         profile_dir = pathlib.Path(_REMOTE_BROWSER_PROFILE)
         profile_dir.mkdir(parents=True, exist_ok=True)
 
+        display = os.environ.get("DISPLAY", ":1")
         env = os.environ.copy()
         env["DISPLAY"] = display
+
+        # 检查虚拟显示器是否可用，否则使用 headless 模式
+        headless = False
+        try:
+            result = subprocess.run(
+                ["xdpyinfo"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env=env,
+                timeout=2,
+            )
+            if result.returncode != 0:
+                headless = True
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            headless = True
+
+        args = [
+            browser_bin,
+            "--no-sandbox",
+            "--disable-gpu",
+            "--disable-dev-shm-usage",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--remote-debugging-address=127.0.0.1",
+            f"--remote-debugging-port={_REMOTE_BROWSER_PORT}",
+            f"--user-data-dir={profile_dir}",
+            "--window-size=1280,800",
+            "about:blank",
+        ]
+        if headless:
+            args.append("--headless=new")
+            logger.info("虚拟显示器不可用，以 headless 模式启动 Chrome")
+
         subprocess.Popen(
-            [
-                browser_bin,
-                "--no-sandbox",
-                "--disable-gpu",
-                "--disable-dev-shm-usage",
-                "--no-first-run",
-                "--no-default-browser-check",
-                "--remote-debugging-address=127.0.0.1",
-                f"--remote-debugging-port={_REMOTE_BROWSER_PORT}",
-                f"--user-data-dir={profile_dir}",
-                "--window-size=1280,800",
-                "about:blank",
-            ],
+            args,
             stdout=open("/tmp/manus-chromium.log", "w"),
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
@@ -289,12 +312,12 @@ class BrowserService:
             try:
                 s = _socket.create_connection(("127.0.0.1", _REMOTE_BROWSER_PORT), timeout=1)
                 s.close()
-                logger.info("本地 Chromium 已启动，CDP 端口 %d 就绪", _REMOTE_BROWSER_PORT)
+                logger.info("本地 Chrome 已启动，CDP 端口 %d 就绪 (headless=%s)", _REMOTE_BROWSER_PORT, headless)
                 return
             except OSError as exc:
                 last_error = exc
                 await asyncio.sleep(0.3)
-        raise RuntimeError(f"本地 Chromium 启动超时，CDP 端口未就绪: {last_error}")
+        raise RuntimeError(f"本地 Chrome 启动超时，CDP 端口未就绪: {last_error}")
 
     async def _connect_over_cdp(self, local_port: int):
         """连接宿主机本地隧道上的 Chromium CDP。"""
