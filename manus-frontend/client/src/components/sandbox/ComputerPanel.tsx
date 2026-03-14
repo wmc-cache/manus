@@ -89,6 +89,7 @@ interface ComputerPanelProps {
   onWindowChange: (window: ActiveWindow) => void;
   terminalOutput: string;
   onTerminalInput?: (data: string) => void;
+  onTerminalResize?: (cols: number, rows: number) => void;
   browserData: BrowserData | null;
   editorFile: FileContent | null;
   fileTree: FileNode[];
@@ -125,6 +126,7 @@ export default function ComputerPanel({
   onWindowChange,
   terminalOutput,
   onTerminalInput,
+  onTerminalResize,
   browserData,
   editorFile,
   fileTree,
@@ -343,6 +345,7 @@ export default function ComputerPanel({
               <TerminalWindow
                 output={terminalOutput}
                 onInput={onTerminalInput}
+                onResize={onTerminalResize}
               />
             )}
             {activeWindow === "editor" && (

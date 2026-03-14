@@ -350,6 +350,7 @@ export default function Home() {
     onWindowChange: sandbox.setActiveWindow,
     terminalOutput: sandbox.terminalOutput,
     onTerminalInput: sandbox.sendTerminalInput,
+    onTerminalResize: sandbox.sendTerminalResize,
     browserData: sandbox.browserData,
     editorFile: sandbox.editorFile,
     fileTree: sandbox.fileTree,

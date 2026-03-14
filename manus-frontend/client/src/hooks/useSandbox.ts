@@ -329,6 +329,21 @@ export function useSandbox() {
     }
   }, []);
 
+  // 发送终端尺寸变化
+  const sendTerminalResize = useCallback((cols: number, rows: number) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(
+        JSON.stringify({
+          type: "terminal_resize",
+          session_id: "default",
+          cols,
+          rows,
+          conversation_id: currentConvIdRef.current,
+        })
+      );
+    }
+  }, []);
+
   const browserClick = useCallback((x: number, y: number, viewportWidth: number, viewportHeight: number) => {
     const convId = currentConvIdRef.current;
     if (!convId || wsRef.current?.readyState !== WebSocket.OPEN) return;
@@ -483,6 +498,7 @@ export function useSandbox() {
     browserInteractionError,
     downloadingAllFiles,
     sendTerminalInput,
+    sendTerminalResize,
     browserClick,
     browserType,
     browserNavigate,

@@ -5,7 +5,14 @@ import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  optimizeDeps: {
+    include: ["@novnc/novnc"],
+  },
   build: {
+    commonjsOptions: {
+      // noVNC 1.6.0 使用了顶层 await，跳过 CommonJS 转换
+      ignore: (id: string) => id.includes("novnc"),
+    },
     rollupOptions: {
       output: {
         manualChunks(id) {
@@ -14,6 +21,9 @@ export default defineConfig({
           }
           if (id.includes("@novnc/novnc")) {
             return "novnc";
+          }
+          if (id.includes("@xterm")) {
+            return "xterm";
           }
           if (id.includes("recharts")) {
             return "charts";

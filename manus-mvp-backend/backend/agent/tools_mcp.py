@@ -349,13 +349,41 @@ async def _execute_via_mcp(
             sys.path.insert(0, mcp_shared_path)
 
         from mcp_client import mcp_client
+
+        # 浏览器工具：发布导航事件
         if name == "browser_navigate":
             await _publish_browser_event(
                 "browser_navigating",
                 {"url": arguments.get("url", "")},
                 conversation_id,
             )
+
+        # 终端工具：执行前推送 terminal_command 事件
+        if name == "shell_exec":
+            await _publish_terminal_event(
+                "terminal_command",
+                {"command": arguments.get("command", ""), "session_id": "default"},
+                conversation_id,
+            )
+        elif name == "execute_code":
+            code_snippet = arguments.get("code", "")
+            display_cmd = f"python3 _temp_code.py  # {code_snippet[:60]}..." if len(code_snippet) > 60 else f"python3 -c '{code_snippet}'"
+            await _publish_terminal_event(
+                "terminal_command",
+                {"command": display_cmd, "session_id": "default"},
+                conversation_id,
+            )
+
         result = await mcp_client.execute_tool(name, arguments, conversation_id)
+
+        # 终端工具：执行后推送 terminal_output 事件
+        if name in ("shell_exec", "execute_code"):
+            await _publish_terminal_event(
+                "terminal_output",
+                {"session_id": "default", "data": f"{result}\n"},
+                conversation_id,
+            )
+
         if name in _BROWSER_TOOL_NAMES:
             return await _handle_browser_tool_result(name, arguments, result, conversation_id)
         return result
@@ -391,6 +419,27 @@ async def _publish_browser_event(
         )
     except Exception:
         logger.exception("[tools_mcp] 发布浏览器事件失败: %s", event_type)
+
+
+async def _publish_terminal_event(
+    event_type: str,
+    data: Dict[str, Any],
+    conversation_id: Optional[str],
+) -> None:
+    """向前端终端窗口广播 terminal_command / terminal_output 事件。"""
+    try:
+        from sandbox.event_bus import SandboxEvent, event_bus
+
+        await event_bus.publish(
+            SandboxEvent(
+                event_type,
+                data,
+                window_id="terminal_default",
+                conversation_id=conversation_id,
+            )
+        )
+    except Exception:
+        logger.exception("[tools_mcp] 发布终端事件失败: %s", event_type)
 
 
 async def _handle_browser_tool_result(
